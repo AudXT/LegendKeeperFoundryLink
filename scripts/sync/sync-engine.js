@@ -467,21 +467,38 @@ export class LegendKeeperSyncEngine {
       }
     }
 
+    const existingFolderByResourceId = new Map();
     const folderByResourceId = new Map();
+    const depthByFolderId = new Map();
+
     for (const f of journalFolders()) {
       const rId = f.getFlag(MODULE_ID, FLAGS.RESOURCE_ID);
-      if (rId) folderByResourceId.set(rId, f);
+      if (rId) existingFolderByResourceId.set(rId, f);
     }
 
     const getFolderDepth = (folder) => {
+      if (!folder) return 0;
+      if (depthByFolderId.has(folder.id)) return depthByFolderId.get(folder.id);
+      if (typeof folder.depth === "number" && folder.depth > 0) {
+        depthByFolderId.set(folder.id, folder.depth);
+        return folder.depth;
+      }
       let depth = 0;
       let cur = folder;
-      while (cur) {
+      const seen = new Set();
+      while (cur && !seen.has(cur.id)) {
+        seen.add(cur.id);
         depth++;
-        cur = cur.folder;
+        const parentRef = cur.folder ?? cur._source?.folder;
+        cur = typeof parentRef === "string" ? game.folders?.get?.(parentRef) : parentRef;
       }
+      depthByFolderId.set(folder.id, depth);
       return depth;
     };
+
+    if (rootFolder) {
+      depthByFolderId.set(rootFolder.id, 1);
+    }
 
     const ensureFolderForResource = async (resId, visiting = new Set()) => {
       if (!resId || !remoteById.has(resId)) return rootFolder;
@@ -501,35 +518,55 @@ export class LegendKeeperSyncEngine {
         return parentFolder;
       }
 
-      let folder = journalFolders().find(
-        (f) => f.getFlag(MODULE_ID, FLAGS.RESOURCE_ID) === res.id
-      );
-      if (!folder) {
-        const folderData = {
-          name: res.name.slice(0, 100),
-          type: "JournalEntry",
-          folder: parentFolder?.id || null,
-          sorting: "m",
-          flags: {
-            [MODULE_ID]: {
-              [FLAGS.RESOURCE_ID]: res.id,
-              [FLAGS.PARENT_ID]: res.parentId || null
+      let folder =
+        existingFolderByResourceId.get(res.id) ||
+        journalFolders().find((f) => f.getFlag(MODULE_ID, FLAGS.RESOURCE_ID) === res.id);
+
+      try {
+        if (!folder) {
+          const folderData = {
+            name: res.name.slice(0, 100),
+            type: "JournalEntry",
+            folder: parentFolder?.id || null,
+            sorting: "m",
+            flags: {
+              [MODULE_ID]: {
+                [FLAGS.RESOURCE_ID]: res.id,
+                [FLAGS.PARENT_ID]: res.parentId || null
+              }
             }
+          };
+          if (res.iconColor && /^#[0-9A-Fa-f]{6}$/.test(res.iconColor)) {
+            folderData.color = res.iconColor;
           }
-        };
-        if (res.iconColor && /^#[0-9A-Fa-f]{6}$/.test(res.iconColor)) {
-          folderData.color = res.iconColor;
+          folder = await Folder.create(folderData);
+          if (folder) {
+            depthByFolderId.set(folder.id, parentDepth + 1);
+          }
+        } else {
+          const currentParentId =
+            (typeof folder.folder === "string" ? folder.folder : folder.folder?.id) ??
+            folder._source?.folder ??
+            null;
+          const desiredParentId = parentFolder?.id || null;
+          if (folder.name !== res.name.slice(0, 100) || currentParentId !== desiredParentId) {
+            await folder.update({
+              name: res.name.slice(0, 100),
+              folder: desiredParentId
+            });
+          }
+          depthByFolderId.set(folder.id, parentDepth + 1);
         }
-        folder = await Folder.create(folderData);
-      } else if (folder.name !== res.name || (folder.folder?.id || null) !== (parentFolder?.id || null)) {
-        await folder.update({
-          name: res.name.slice(0, 100),
-          folder: parentFolder?.id || null
-        });
+      } catch (err) {
+        console.warn(
+          `LegendKeeper Sync | Folder depth limit reached for "${res.name}", using parent folder "${parentFolder?.name || "root"}":`,
+          err?.message || err
+        );
+        folder = parentFolder;
       }
 
-      folderByResourceId.set(res.id, folder);
-      return folder;
+      folderByResourceId.set(res.id, folder || parentFolder);
+      return folder || parentFolder;
     };
 
     for (const parentId of parentResourceIds) {
