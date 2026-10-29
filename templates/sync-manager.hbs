@@ -6,12 +6,12 @@
         <span class="lk-status-dot lk-dot-connected" title="Connected"></span>
         <div class="lk-project-details">
           <strong>{{connection.project.name}}</strong>
-          <span class="lk-project-id">({{connection.project.id}})</span>
+          <span class="lk-project-id">({{connection.project.id}}) • v{{moduleVersion}}</span>
         </div>
       {{else}}
         <span class="lk-status-dot lk-dot-error" title="Not Connected"></span>
         <div class="lk-project-details">
-          <strong>Not Connected</strong>
+          <strong>Not Connected (v{{moduleVersion}})</strong>
           {{#if connection.error}}
             <span class="lk-error-text">{{connection.error}}</span>
           {{/if}}

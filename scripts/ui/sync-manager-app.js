@@ -1,4 +1,4 @@
-import { MODULE_ID } from "../constants.js";
+import { MODULE_ID, MODULE_VERSION } from "../constants.js?v=1.1.3";
 
 const BaseApp = globalThis.foundry?.applications?.api?.ApplicationV2
   ? globalThis.foundry.applications.api.HandlebarsApplicationMixin(
@@ -74,6 +74,7 @@ export class LegendKeeperSyncManagerApp extends BaseApp {
     });
 
     return {
+      moduleVersion: MODULE_VERSION,
       connection: this.connection,
       counts: this.overview.counts,
       filteredItems,

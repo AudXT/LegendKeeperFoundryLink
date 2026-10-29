@@ -1,17 +1,17 @@
-import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js";
+import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.1.3";
 import {
   LegendKeeper,
   NotFoundError,
   VersionMismatchError
-} from "../sdk/client.js";
+} from "../sdk/client.js?v=1.1.3";
 import {
   blocksToHtml,
   renderResourceDecorationHtml,
   renderMapDocumentHtml,
   renderTimelineDocumentHtml
-} from "../converter/blocks-to-html.js";
-import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js";
-import { promptPageConflictResolution } from "../ui/conflict-dialog.js";
+} from "../converter/blocks-to-html.js?v=1.1.3";
+import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.1.3";
+import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.1.3";
 
 /**
  * Computes a deterministic string hash (FNV-1a 32-bit hex) for detecting local journal modifications
@@ -501,24 +501,49 @@ export class LegendKeeperSyncEngine {
       }
     }
 
+    const getFolderParentId = (f) =>
+      (typeof f?.folder === "string" ? f.folder : f?.folder?.id) ?? f?._source?.folder ?? null;
+
     const getFolderDepth = (folder) => {
       if (!folder) return 0;
-      if (depthByFolderId.has(folder.id)) return depthByFolderId.get(folder.id);
-      if (typeof folder.depth === "number" && folder.depth > 0) {
-        depthByFolderId.set(folder.id, folder.depth);
-        return folder.depth;
-      }
-      let depth = 0;
+      const tracked = depthByFolderId.get(folder.id) ?? 0;
+      const propDepth = typeof folder.depth === "number" && folder.depth > 0 ? folder.depth : 0;
+
+      let walked = 0;
       let cur = folder;
       const seen = new Set();
       while (cur && !seen.has(cur.id)) {
         seen.add(cur.id);
-        depth++;
-        const parentRef = cur.folder ?? cur._source?.folder;
-        cur = typeof parentRef === "string" ? game.folders?.get?.(parentRef) : parentRef;
+        walked++;
+        const parentId = getFolderParentId(cur);
+        cur = parentId ? game.folders?.get?.(parentId) : null;
       }
+
+      const depth = Math.max(tracked, propDepth, walked, 1);
       depthByFolderId.set(folder.id, depth);
       return depth;
+    };
+
+    const getExistingSubtreeDepth = (folder, visited = new Set()) => {
+      if (!folder || visited.has(folder.id)) return 0;
+      visited.add(folder.id);
+      let maxChildDepth = 0;
+      for (const f of journalFolders()) {
+        if (getFolderParentId(f) === folder.id) {
+          maxChildDepth = Math.max(maxChildDepth, 1 + getExistingSubtreeDepth(f, visited));
+        }
+      }
+      return maxChildDepth;
+    };
+
+    const detachDirectChildFolders = async (folder) => {
+      if (!folder) return;
+      for (const f of journalFolders()) {
+        if (getFolderParentId(f) === folder.id) {
+          await f.update({ folder: null });
+          depthByFolderId.set(f.id, 1);
+        }
+      }
     };
 
     const getFolderTier = (folder) => {
@@ -553,11 +578,15 @@ export class LegendKeeperSyncEngine {
         return await Folder.create(folderData);
       }
 
-      const currentParentId =
-        (typeof existingFolder.folder === "string" ? existingFolder.folder : existingFolder.folder?.id) ??
-        existingFolder._source?.folder ??
-        null;
+      const currentParentId = getFolderParentId(existingFolder);
       if (existingFolder.name !== desiredName || currentParentId !== desiredParentId) {
+        const targetParentDepth = getFolderDepth(targetParent);
+        if (
+          currentParentId !== desiredParentId &&
+          targetParentDepth + 1 + getExistingSubtreeDepth(existingFolder) > maxDepth
+        ) {
+          await detachDirectChildFolders(existingFolder);
+        }
         await existingFolder.update({
           name: desiredName,
           folder: desiredParentId
