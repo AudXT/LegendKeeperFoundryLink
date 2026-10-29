@@ -431,32 +431,66 @@ export class LegendKeeperSyncEngine {
 
   /**
    * Ensures Foundry JournalEntry Folders exist for the root sync folder (if configured)
-   * and for every LegendKeeper resource that has child resources, respecting Foundry's max folder depth.
+   * and for every LegendKeeper resource that has child resources.
+   * When a folder hierarchy exceeds Foundry's hard 4-level folder nesting limit,
+   * automatically creates top-level overflow root folders ("LegendKeeper 2", "LegendKeeper 3", ...)
+   * so deeply nested folders continue nesting cleanly without errors or loss of structure.
    */
   async ensureFolderHierarchy(remoteResources = []) {
     const maxDepth = globalThis.CONST?.FOLDER_MAX_DEPTH ?? 4;
-    const rootFolderName = (this.getSetting(SETTINGS.ROOT_FOLDER_NAME, "LegendKeeper") || "").trim();
+    const configuredRootName = (this.getSetting(SETTINGS.ROOT_FOLDER_NAME, "LegendKeeper") || "").trim();
+    const baseRootName = configuredRootName || "LegendKeeper";
 
     const journalFolders = () => (game.folders ?? []).filter((f) => f.type === "JournalEntry");
+    const isTopLevelFolder = (f) => !f.folder && !f._source?.folder;
 
-    let rootFolder = null;
-    if (rootFolderName) {
-      rootFolder = journalFolders().find(
-        (f) => !f.folder && (f.getFlag(MODULE_ID, FLAGS.IS_ROOT_FOLDER) || f.name === rootFolderName)
-      );
-      if (!rootFolder) {
-        rootFolder = await Folder.create({
-          name: rootFolderName,
+    const existingFolderByResourceId = new Map();
+    const folderByResourceId = new Map();
+    const depthByFolderId = new Map();
+    const tierByFolderId = new Map();
+    const rootFolderByTier = new Map();
+
+    for (const f of journalFolders()) {
+      const rId = f.getFlag(MODULE_ID, FLAGS.RESOURCE_ID);
+      if (rId) existingFolderByResourceId.set(rId, f);
+    }
+
+    const ensureRootFolderForTier = async (tier = 1) => {
+      if (tier === 1 && !configuredRootName) return null;
+      if (rootFolderByTier.has(tier)) return rootFolderByTier.get(tier);
+
+      const targetName = tier === 1 ? configuredRootName : `${baseRootName} ${tier}`;
+      let root = journalFolders().find((f) => {
+        if (!isTopLevelFolder(f)) return false;
+        const isRootFlag = Boolean(f.getFlag(MODULE_ID, FLAGS.IS_ROOT_FOLDER));
+        const storedTier = f.getFlag(MODULE_ID, FLAGS.OVERFLOW_TIER) ?? 1;
+        return (isRootFlag && storedTier === tier) || f.name === targetName;
+      });
+
+      if (!root) {
+        root = await Folder.create({
+          name: targetName,
           type: "JournalEntry",
+          folder: null,
           sorting: "m",
           flags: {
             [MODULE_ID]: {
-              [FLAGS.IS_ROOT_FOLDER]: true
+              [FLAGS.IS_ROOT_FOLDER]: true,
+              [FLAGS.OVERFLOW_TIER]: tier
             }
           }
         });
       }
-    }
+
+      if (root) {
+        rootFolderByTier.set(tier, root);
+        depthByFolderId.set(root.id, 1);
+        tierByFolderId.set(root.id, tier);
+      }
+      return root;
+    };
+
+    const rootFolder = await ensureRootFolderForTier(1);
 
     const parentResourceIds = new Set();
     const remoteById = new Map();
@@ -465,15 +499,6 @@ export class LegendKeeperSyncEngine {
       if (res.parentId && res.parentId !== "templates") {
         parentResourceIds.add(res.parentId);
       }
-    }
-
-    const existingFolderByResourceId = new Map();
-    const folderByResourceId = new Map();
-    const depthByFolderId = new Map();
-
-    for (const f of journalFolders()) {
-      const rId = f.getFlag(MODULE_ID, FLAGS.RESOURCE_ID);
-      if (rId) existingFolderByResourceId.set(rId, f);
     }
 
     const getFolderDepth = (folder) => {
@@ -496,9 +521,50 @@ export class LegendKeeperSyncEngine {
       return depth;
     };
 
-    if (rootFolder) {
-      depthByFolderId.set(rootFolder.id, 1);
-    }
+    const getFolderTier = (folder) => {
+      if (!folder) return 1;
+      if (tierByFolderId.has(folder.id)) return tierByFolderId.get(folder.id);
+      const flaggedTier = folder.getFlag?.(MODULE_ID, FLAGS.OVERFLOW_TIER);
+      if (typeof flaggedTier === "number" && flaggedTier >= 1) {
+        tierByFolderId.set(folder.id, flaggedTier);
+        return flaggedTier;
+      }
+      return 1;
+    };
+
+    const createOrUpdateFolderUnderParent = async (res, existingFolder, targetParent, desiredName) => {
+      const desiredParentId = targetParent?.id || null;
+      if (!existingFolder) {
+        const folderData = {
+          name: desiredName,
+          type: "JournalEntry",
+          folder: desiredParentId,
+          sorting: "m",
+          flags: {
+            [MODULE_ID]: {
+              [FLAGS.RESOURCE_ID]: res.id,
+              [FLAGS.PARENT_ID]: res.parentId || null
+            }
+          }
+        };
+        if (res.iconColor && /^#[0-9A-Fa-f]{6}$/.test(res.iconColor)) {
+          folderData.color = res.iconColor;
+        }
+        return await Folder.create(folderData);
+      }
+
+      const currentParentId =
+        (typeof existingFolder.folder === "string" ? existingFolder.folder : existingFolder.folder?.id) ??
+        existingFolder._source?.folder ??
+        null;
+      if (existingFolder.name !== desiredName || currentParentId !== desiredParentId) {
+        await existingFolder.update({
+          name: desiredName,
+          folder: desiredParentId
+        });
+      }
+      return existingFolder;
+    };
 
     const ensureFolderForResource = async (resId, visiting = new Set()) => {
       if (!resId || !remoteById.has(resId)) return rootFolder;
@@ -508,61 +574,60 @@ export class LegendKeeperSyncEngine {
 
       const res = remoteById.get(resId);
       let parentFolder = rootFolder;
+      let parentRes = null;
       if (res.parentId && remoteById.has(res.parentId)) {
+        parentRes = remoteById.get(res.parentId);
         parentFolder = await ensureFolderForResource(res.parentId, visiting);
       }
 
-      const parentDepth = getFolderDepth(parentFolder);
+      let parentDepth = getFolderDepth(parentFolder);
+      let targetTier = getFolderTier(parentFolder);
+      let isOverflowRootEntry = false;
+
       if (parentDepth >= maxDepth) {
-        folderByResourceId.set(resId, parentFolder);
-        return parentFolder;
+        targetTier += 1;
+        parentFolder = await ensureRootFolderForTier(targetTier);
+        parentDepth = getFolderDepth(parentFolder);
+        isOverflowRootEntry = true;
       }
+
+      const desiredName = (
+        isOverflowRootEntry && parentRes?.name
+          ? `${parentRes.name} ▸ ${res.name}`
+          : res.name
+      ).slice(0, 100);
 
       let folder =
         existingFolderByResourceId.get(res.id) ||
         journalFolders().find((f) => f.getFlag(MODULE_ID, FLAGS.RESOURCE_ID) === res.id);
 
       try {
-        if (!folder) {
-          const folderData = {
-            name: res.name.slice(0, 100),
-            type: "JournalEntry",
-            folder: parentFolder?.id || null,
-            sorting: "m",
-            flags: {
-              [MODULE_ID]: {
-                [FLAGS.RESOURCE_ID]: res.id,
-                [FLAGS.PARENT_ID]: res.parentId || null
-              }
-            }
-          };
-          if (res.iconColor && /^#[0-9A-Fa-f]{6}$/.test(res.iconColor)) {
-            folderData.color = res.iconColor;
-          }
-          folder = await Folder.create(folderData);
-          if (folder) {
-            depthByFolderId.set(folder.id, parentDepth + 1);
-          }
-        } else {
-          const currentParentId =
-            (typeof folder.folder === "string" ? folder.folder : folder.folder?.id) ??
-            folder._source?.folder ??
-            null;
-          const desiredParentId = parentFolder?.id || null;
-          if (folder.name !== res.name.slice(0, 100) || currentParentId !== desiredParentId) {
-            await folder.update({
-              name: res.name.slice(0, 100),
-              folder: desiredParentId
-            });
-          }
+        folder = await createOrUpdateFolderUnderParent(res, folder, parentFolder, desiredName);
+        if (folder) {
           depthByFolderId.set(folder.id, parentDepth + 1);
+          tierByFolderId.set(folder.id, targetTier);
         }
       } catch (err) {
-        console.warn(
-          `LegendKeeper Sync | Folder depth limit reached for "${res.name}", using parent folder "${parentFolder?.name || "root"}":`,
-          err?.message || err
-        );
-        folder = parentFolder;
+        // If Foundry rejected the folder (e.g. due to existing sub-tree depth during a move),
+        // spill it over into the next top-level overflow folder ("LegendKeeper 2", "LegendKeeper 3", ...).
+        try {
+          const fallbackTier = isOverflowRootEntry ? targetTier : targetTier + 1;
+          const overflowRoot = await ensureRootFolderForTier(fallbackTier);
+          const overflowName = (
+            parentRes?.name ? `${parentRes.name} ▸ ${res.name}` : res.name
+          ).slice(0, 100);
+          folder = await createOrUpdateFolderUnderParent(res, folder, overflowRoot, overflowName);
+          if (folder) {
+            depthByFolderId.set(folder.id, getFolderDepth(overflowRoot) + 1);
+            tierByFolderId.set(folder.id, fallbackTier);
+          }
+        } catch (fallbackErr) {
+          console.warn(
+            `LegendKeeper Sync | Could not place folder "${res.name}" in overflow folder, using parent folder:`,
+            fallbackErr?.message || fallbackErr
+          );
+          folder = parentFolder;
+        }
       }
 
       folderByResourceId.set(res.id, folder || parentFolder);
@@ -1005,11 +1070,12 @@ export class LegendKeeperSyncEngine {
       let resourceId = journalEntry.getFlag(MODULE_ID, FLAGS.RESOURCE_ID);
       const folderResourceId = journalEntry.folder?.getFlag?.(MODULE_ID, FLAGS.RESOURCE_ID) || null;
       const isRootFolder = Boolean(journalEntry.folder?.getFlag?.(MODULE_ID, FLAGS.IS_ROOT_FOLDER));
+      const folderOverflowTier = journalEntry.folder?.getFlag?.(MODULE_ID, FLAGS.OVERFLOW_TIER) ?? 1;
       const storedParentId = journalEntry.getFlag(MODULE_ID, FLAGS.PARENT_ID) || null;
 
       let targetParentId = storedParentId;
       if (journalEntry.folder) {
-        if (isRootFolder) {
+        if (isRootFolder && folderOverflowTier === 1) {
           targetParentId = null;
         } else if (folderResourceId && folderResourceId !== resourceId) {
           targetParentId = folderResourceId;

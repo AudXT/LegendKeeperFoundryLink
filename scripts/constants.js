@@ -37,6 +37,7 @@ export const FLAGS = {
   PROPERTIES: "properties",
   PRESERVED_BLOCKS: "preservedBlocks",
   IS_ROOT_FOLDER: "isRootFolder",
+  OVERFLOW_TIER: "overflowTier",
   ASSET_MAP: "assetMap"
 };
 
