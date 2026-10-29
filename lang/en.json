@@ -1,0 +1,94 @@
+{
+  "LK_SYNC": {
+    "Title": "LegendKeeper Sync",
+    "Buttons": {
+      "OpenSyncManager": "LegendKeeper Sync",
+      "PullFromLK": "Pull from LegendKeeper",
+      "PushToLK": "Push to LegendKeeper",
+      "TestConnection": "Test Connection",
+      "Refresh": "Refresh Status",
+      "PullAll": "Pull All from LK",
+      "PushAllLinked": "Push Linked to LK",
+      "PushAllUnlinked": "Push Local-Only to LK",
+      "Unlink": "Unlink"
+    },
+    "Settings": {
+      "ApiKey": {
+        "Name": "LegendKeeper API Key",
+        "Hint": "Project-scoped API key (starts with lk_...) generated in LegendKeeper under Project Settings → Developers → API Keys."
+      },
+      "BaseUrl": {
+        "Name": "API Base URL / CORS Proxy",
+        "Hint": "Default is https://www.legendkeeper.com. If browser CORS blocks direct requests, run 'node tools/lk-cors-proxy.mjs' and set this to http://localhost:8787."
+      },
+      "ProjectId": {
+        "Name": "Project ID (Optional)",
+        "Hint": "Leave blank to auto-detect from the API key, or specify a LegendKeeper Project ID explicitly."
+      },
+      "RootFolderName": {
+        "Name": "Root Journal Folder Name",
+        "Hint": "Foundry Journal folder where synced LegendKeeper resources will be placed. Leave empty to place top-level resources at the Journal root."
+      },
+      "SecretHandling": {
+        "Name": "LegendKeeper Secret Handling",
+        "Hint": "How LegendKeeper secret blocks and hidden elements should be imported into Foundry Journal pages.",
+        "Choices": {
+          "secretBlock": "Convert to Foundry <section class=\"secret\"> blocks (GM-only revealable)",
+          "strip": "Exclude / Strip secret blocks on pull (preserve in LK on push)",
+          "normal": "Import as normal visible text"
+        }
+      },
+      "HiddenResourceHandling": {
+        "Name": "Hidden Resource & Document Handling",
+        "Hint": "How resources or document tabs marked Hidden in LegendKeeper should be imported.",
+        "Choices": {
+          "gmOnly": "Import as GM-Only (Observer permission: None)",
+          "skip": "Skip hidden resources and hidden document tabs",
+          "default": "Import with default Journal permissions"
+        }
+      },
+      "ConflictPolicy": {
+        "Name": "Sync Conflict Policy",
+        "Hint": "Action to take when both LegendKeeper and Foundry have been modified since the last sync.",
+        "Choices": {
+          "preferLK": "Prefer LegendKeeper on Pull / Prefer Foundry on Push",
+          "skip": "Skip conflicting entries during bulk sync",
+          "ask": "Prompt before overwriting conflicting entries"
+        }
+      },
+      "IncludeSidebarProperties": {
+        "Name": "Render Sidebar Properties & Tags in Journal",
+        "Hint": "When enabled, a resource's LegendKeeper tags, aliases, banner, and sidebar properties are rendered at the top of its primary Journal page."
+      },
+      "IncludeNavigationLinks": {
+        "Name": "Render Hierarchy Breadcrumbs & Child Links",
+        "Hint": "When enabled, synced Journal entries include clickable @UUID links to their parent resource and child resources."
+      },
+      "AutoSyncOnSave": {
+        "Name": "Auto-Push Linked Journals on Save",
+        "Hint": "Automatically push changes to LegendKeeper whenever a linked Journal Entry or Page is edited and saved in Foundry."
+      },
+      "UploadLocalImages": {
+        "Name": "Upload Local Images to LegendKeeper on Push",
+        "Hint": "When pushing Foundry journals to LegendKeeper, upload local/Foundry images as LegendKeeper image assets so they can be embedded in LK blocks."
+      }
+    },
+    "Status": {
+      "in-sync": "In Sync",
+      "remote-only": "In LK Only",
+      "remote-newer": "LK Newer",
+      "local-only": "In Foundry Only",
+      "local-newer": "Foundry Newer",
+      "conflict": "Conflict"
+    },
+    "Notifications": {
+      "NoApiKey": "LegendKeeper Sync: Please configure your LegendKeeper API Key in Module Settings.",
+      "Connected": "Connected to LegendKeeper project: {name} ({id})",
+      "PullComplete": "LegendKeeper Pull complete: {created} created, {updated} updated, {skipped} skipped.",
+      "PushComplete": "LegendKeeper Push complete: {created} created, {updated} updated, {skipped} skipped.",
+      "SinglePullSuccess": "Pulled \"{name}\" from LegendKeeper.",
+      "SinglePushSuccess": "Pushed \"{name}\" to LegendKeeper.",
+      "Unlinked": "Unlinked \"{name}\" from LegendKeeper."
+    }
+  }
+}

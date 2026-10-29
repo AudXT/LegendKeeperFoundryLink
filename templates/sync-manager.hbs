@@ -1,0 +1,217 @@
+<div class="lk-sync-manager">
+  <!-- Connection Header -->
+  <header class="lk-sync-header-bar">
+    <div class="lk-connection-info">
+      {{#if connection.ok}}
+        <span class="lk-status-dot lk-dot-connected" title="Connected"></span>
+        <div class="lk-project-details">
+          <strong>{{connection.project.name}}</strong>
+          <span class="lk-project-id">({{connection.project.id}})</span>
+        </div>
+      {{else}}
+        <span class="lk-status-dot lk-dot-error" title="Not Connected"></span>
+        <div class="lk-project-details">
+          <strong>Not Connected</strong>
+          {{#if connection.error}}
+            <span class="lk-error-text">{{connection.error}}</span>
+          {{/if}}
+        </div>
+      {{/if}}
+    </div>
+
+    <div class="lk-header-actions">
+      <button type="button" class="lk-btn" data-action="test-connection" {{#if isBusy}}disabled{{/if}}>
+        <i class="fas fa-plug"></i> Test Connection
+      </button>
+      <button type="button" class="lk-btn" data-action="refresh" {{#if isBusy}}disabled{{/if}}>
+        <i class="fas fa-sync-alt {{#if isLoading}}fa-spin{{/if}}"></i> Refresh
+      </button>
+      <button type="button" class="lk-btn" data-action="open-settings">
+        <i class="fas fa-cog"></i> Settings
+      </button>
+    </div>
+  </header>
+
+  <!-- Summary Status Cards -->
+  <section class="lk-summary-cards">
+    <div class="lk-card {{#if (eq statusFilter 'all')}}active{{/if}}" data-action="filter-status" data-status="all">
+      <span class="lk-card-value">{{counts.total}}</span>
+      <span class="lk-card-label">Total</span>
+    </div>
+    <div class="lk-card lk-card-insync {{#if (eq statusFilter 'in-sync')}}active{{/if}}" data-action="filter-status" data-status="in-sync">
+      <span class="lk-card-value">{{counts.inSync}}</span>
+      <span class="lk-card-label">In Sync</span>
+    </div>
+    <div class="lk-card lk-card-remote {{#if (eq statusFilter 'remote-only')}}active{{/if}}" data-action="filter-status" data-status="remote-only">
+      <span class="lk-card-value">{{counts.remoteOnly}}</span>
+      <span class="lk-card-label">In LK Only</span>
+    </div>
+    <div class="lk-card lk-card-remotenewer {{#if (eq statusFilter 'remote-newer')}}active{{/if}}" data-action="filter-status" data-status="remote-newer">
+      <span class="lk-card-value">{{counts.remoteNewer}}</span>
+      <span class="lk-card-label">LK Newer</span>
+    </div>
+    <div class="lk-card lk-card-local {{#if (eq statusFilter 'local-only')}}active{{/if}}" data-action="filter-status" data-status="local-only">
+      <span class="lk-card-value">{{counts.localOnly}}</span>
+      <span class="lk-card-label">Foundry Only</span>
+    </div>
+    <div class="lk-card lk-card-localnewer {{#if (eq statusFilter 'local-newer')}}active{{/if}}" data-action="filter-status" data-status="local-newer">
+      <span class="lk-card-value">{{counts.localNewer}}</span>
+      <span class="lk-card-label">Foundry Newer</span>
+    </div>
+    <div class="lk-card lk-card-conflict {{#if (eq statusFilter 'conflict')}}active{{/if}}" data-action="filter-status" data-status="conflict">
+      <span class="lk-card-value">{{counts.conflict}}</span>
+      <span class="lk-card-label">Conflicts</span>
+    </div>
+  </section>
+
+  <!-- Bulk Sync & Filter Toolbar -->
+  <section class="lk-toolbar">
+    <div class="lk-bulk-buttons">
+      <button type="button" class="lk-btn lk-btn-primary" data-action="pull-all" {{#if isBusy}}disabled{{/if}}>
+        <i class="fas fa-cloud-download-alt"></i> Pull All from LK
+      </button>
+      <button type="button" class="lk-btn lk-btn-accent" data-action="push-linked" {{#if isBusy}}disabled{{/if}}>
+        <i class="fas fa-cloud-upload-alt"></i> Push Modified to LK
+      </button>
+      <button type="button" class="lk-btn" data-action="push-all" {{#if isBusy}}disabled{{/if}} title="Also creates LegendKeeper resources for unlinked Foundry journals">
+        <i class="fas fa-upload"></i> Push All (Incl. Unlinked)
+      </button>
+    </div>
+
+    <div class="lk-filter-controls">
+      <input
+        type="search"
+        class="lk-search-input"
+        placeholder="Search journals, parents, or tags..."
+        value="{{searchQuery}}"
+      />
+      <select class="lk-status-select">
+        <option value="all" {{#if (eq statusFilter "all")}}selected{{/if}}>All Statuses</option>
+        <option value="needs-action" {{#if (eq statusFilter "needs-action")}}selected{{/if}}>Needs Sync Action</option>
+        <option value="in-sync" {{#if (eq statusFilter "in-sync")}}selected{{/if}}>In Sync</option>
+        <option value="remote-only" {{#if (eq statusFilter "remote-only")}}selected{{/if}}>In LK Only</option>
+        <option value="remote-newer" {{#if (eq statusFilter "remote-newer")}}selected{{/if}}>LK Newer</option>
+        <option value="local-only" {{#if (eq statusFilter "local-only")}}selected{{/if}}>In Foundry Only</option>
+        <option value="local-newer" {{#if (eq statusFilter "local-newer")}}selected{{/if}}>Foundry Newer</option>
+        <option value="conflict" {{#if (eq statusFilter "conflict")}}selected{{/if}}>Conflicts</option>
+      </select>
+    </div>
+  </section>
+
+  <!-- Live Progress Bar -->
+  {{#if progress.active}}
+    <section class="lk-progress-container">
+      <div class="lk-progress-header">
+        <span class="lk-progress-phase">{{progress.phase}}</span>
+        <span class="lk-progress-percent">{{progress.percent}}%</span>
+      </div>
+      <div class="lk-progress-bar-track">
+        <div class="lk-progress-bar-fill" style="width: {{progress.percent}}%;"></div>
+      </div>
+    </section>
+  {{/if}}
+
+  <!-- Sync Items Table -->
+  <section class="lk-table-wrapper">
+    <table class="lk-sync-table">
+      <thead>
+        <tr>
+          <th>Resource / Journal</th>
+          <th>Parent / Folder</th>
+          <th class="lk-col-center">Pages</th>
+          <th class="lk-col-center">Status</th>
+          <th class="lk-col-actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{#if filteredItems.length}}
+          {{#each filteredItems}}
+            <tr class="lk-row lk-row-{{this.status}}">
+              <td class="lk-cell-name">
+                <div class="lk-entry-title">{{this.name}}</div>
+                {{#if this.tags.length}}
+                  <div class="lk-entry-tags">
+                    {{#each this.tags}}
+                      <span class="lk-mini-tag">{{this}}</span>
+                    {{/each}}
+                  </div>
+                {{/if}}
+              </td>
+              <td class="lk-cell-parent">
+                {{#if this.parentName}}
+                  <span class="lk-parent-label"><i class="fas fa-folder-open"></i> {{this.parentName}}</span>
+                {{else}}
+                  <span class="lk-muted">—</span>
+                {{/if}}
+              </td>
+              <td class="lk-col-center">{{this.documentCount}}</td>
+              <td class="lk-col-center">
+                <span class="lk-badge lk-badge-{{this.status}}">{{this.statusLabel}}</span>
+              </td>
+              <td class="lk-col-actions">
+                {{#if this.resourceId}}
+                  <button
+                    type="button"
+                    class="lk-icon-btn"
+                    data-action="pull-single"
+                    data-resource-id="{{this.resourceId}}"
+                    data-name="{{this.name}}"
+                    title="Pull from LegendKeeper"
+                    {{#if ../isBusy}}disabled{{/if}}
+                  >
+                    <i class="fas fa-download"></i> Pull
+                  </button>
+                {{/if}}
+                {{#if this.journalId}}
+                  <button
+                    type="button"
+                    class="lk-icon-btn"
+                    data-action="push-single"
+                    data-journal-id="{{this.journalId}}"
+                    data-name="{{this.name}}"
+                    title="Push to LegendKeeper"
+                    {{#if ../isBusy}}disabled{{/if}}
+                  >
+                    <i class="fas fa-upload"></i> Push
+                  </button>
+                  <button
+                    type="button"
+                    class="lk-icon-btn"
+                    data-action="open-journal"
+                    data-journal-id="{{this.journalId}}"
+                    title="Open Foundry Journal"
+                  >
+                    <i class="fas fa-book-open"></i>
+                  </button>
+                {{/if}}
+                {{#if (and this.journalId this.resourceId)}}
+                  <button
+                    type="button"
+                    class="lk-icon-btn lk-btn-danger"
+                    data-action="unlink-journal"
+                    data-journal-id="{{this.journalId}}"
+                    data-name="{{this.name}}"
+                    title="Unlink from LegendKeeper"
+                    {{#if ../isBusy}}disabled{{/if}}
+                  >
+                    <i class="fas fa-unlink"></i>
+                  </button>
+                {{/if}}
+              </td>
+            </tr>
+          {{/each}}
+        {{else}}
+          <tr>
+            <td colspan="5" class="lk-empty-row">
+              {{#if isLoading}}
+                <i class="fas fa-spinner fa-spin"></i> Loading LegendKeeper resources...
+              {{else}}
+                No matching resources or journals found.
+              {{/if}}
+            </td>
+          </tr>
+        {{/if}}
+      </tbody>
+    </table>
+  </section>
+</div>
