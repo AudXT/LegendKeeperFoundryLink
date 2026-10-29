@@ -1,17 +1,17 @@
-import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.1.3";
+import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.2.0";
 import {
   LegendKeeper,
   NotFoundError,
   VersionMismatchError
-} from "../sdk/client.js?v=1.1.3";
+} from "../sdk/client.js?v=1.2.0";
 import {
   blocksToHtml,
   renderResourceDecorationHtml,
   renderMapDocumentHtml,
   renderTimelineDocumentHtml
-} from "../converter/blocks-to-html.js?v=1.1.3";
-import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.1.3";
-import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.1.3";
+} from "../converter/blocks-to-html.js?v=1.2.0";
+import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.2.0";
+import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.2.0";
 
 /**
  * Computes a deterministic string hash (FNV-1a 32-bit hex) for detecting local journal modifications
@@ -64,8 +64,7 @@ export function computeJournalHash(journalEntry) {
     const docId = p.getFlag(MODULE_ID, FLAGS.DOCUMENT_ID) || "";
     return `${docId}:${computePageHash(p)}`;
   });
-  const folderResourceId = journalEntry.folder?.getFlag?.(MODULE_ID, FLAGS.RESOURCE_ID) || "";
-  return computeContentHash(`${journalEntry.name}|${folderResourceId}|${pageSignatures.join("||")}`);
+  return computeContentHash(`${journalEntry.name}|${pageSignatures.join("||")}`);
 }
 
 export class LegendKeeperSyncEngine {
@@ -168,6 +167,9 @@ export class LegendKeeperSyncEngine {
     const unlinkedJournals = [];
 
     for (const entry of game.journal ?? []) {
+      if (entry.getFlag(MODULE_ID, FLAGS.IS_INDEX_JOURNAL)) {
+        continue;
+      }
       const resId = entry.getFlag(MODULE_ID, FLAGS.RESOURCE_ID);
       if (resId) {
         byResourceId.set(resId, entry);
@@ -186,6 +188,47 @@ export class LegendKeeperSyncEngine {
   }
 
   /**
+   * Builds full path display names ("Ancestor / Parent / Name") and parent-child maps for all remote resources.
+   */
+  buildResourcePathInfo(remoteResources = []) {
+    const remoteById = new Map(remoteResources.map((r) => [r.id, r]));
+    const pathById = new Map();
+    const parentPathById = new Map();
+    const childrenByParentId = new Map();
+
+    const sorted = [...remoteResources].sort((a, b) => ((a.rank ?? "") < (b.rank ?? "") ? -1 : 1));
+    for (const r of sorted) {
+      const pKey = r.parentId && r.parentId !== "templates" && remoteById.has(r.parentId) ? r.parentId : null;
+      const list = childrenByParentId.get(pKey) ?? [];
+      list.push(r.id);
+      childrenByParentId.set(pKey, list);
+    }
+
+    const computeSegments = (resId) => {
+      const segments = [];
+      let cur = remoteById.get(resId);
+      const visited = new Set();
+      while (cur && !visited.has(cur.id)) {
+        visited.add(cur.id);
+        segments.unshift(cur.name);
+        if (!cur.parentId || cur.parentId === "templates" || !remoteById.has(cur.parentId)) {
+          break;
+        }
+        cur = remoteById.get(cur.parentId);
+      }
+      return segments;
+    };
+
+    for (const r of remoteResources) {
+      const segments = computeSegments(r.id);
+      pathById.set(r.id, segments.join(" / "));
+      parentPathById.set(r.id, segments.slice(0, -1).join(" / "));
+    }
+
+    return { remoteById, pathById, parentPathById, childrenByParentId };
+  }
+
+  /**
    * Creates converter lookup callbacks (`resolveMention`, `resolveUuidToLk`, `evaluateCollectionFilter`, `resolveImageAssetUrl`)
    * using the current local index and remote resource list.
    */
@@ -200,14 +243,16 @@ export class LegendKeeperSyncEngine {
         const { entry, page } = idx.byDocumentId.get(documentId);
         return {
           uuid: `JournalEntry.${entry.id}.JournalEntryPage.${page.id}`,
-          name: label || page.name || entry.name
+          name: label || page.name || entry.getFlag(MODULE_ID, FLAGS.RESOURCE_NAME) || entry.name
         };
       }
       if (resourceId && idx.byResourceId.has(resourceId)) {
         const entry = idx.byResourceId.get(resourceId);
+        const remote = remoteById.get(resourceId);
+        const cleanName = entry.getFlag(MODULE_ID, FLAGS.RESOURCE_NAME) || remote?.name || entry.name;
         return {
           uuid: `JournalEntry.${entry.id}`,
-          name: label || entry.name
+          name: label || cleanName
         };
       }
       const remote = resourceId ? remoteById.get(resourceId) : null;
@@ -231,7 +276,8 @@ export class LegendKeeperSyncEngine {
           return { resourceId, documentId, name: page.name };
         }
       }
-      return { resourceId, name: entry.name };
+      const cleanName = entry.getFlag(MODULE_ID, FLAGS.RESOURCE_NAME) || entry.name;
+      return { resourceId, name: cleanName };
     };
 
     const evaluateCollectionFilter = (filter, selfResourceId) => {
@@ -322,13 +368,14 @@ export class LegendKeeperSyncEngine {
   async getSyncOverview() {
     const remoteResources = await this.fetchAllRemoteResources();
     const { byResourceId, unlinkedJournals } = this.buildLocalIndex();
-    const remoteById = new Map(remoteResources.map((r) => [r.id, r]));
+    const pathInfo = this.buildResourcePathInfo(remoteResources);
+    const { remoteById, parentPathById } = pathInfo;
 
     const items = [];
 
     for (const res of remoteResources) {
       const localEntry = byResourceId.get(res.id);
-      const parentName = res.parentId && remoteById.has(res.parentId) ? remoteById.get(res.parentId).name : "";
+      const parentName = parentPathById.get(res.id) || "";
 
       if (!localEntry) {
         items.push({
@@ -430,253 +477,273 @@ export class LegendKeeperSyncEngine {
   }
 
   /**
-   * Ensures Foundry JournalEntry Folders exist for the root sync folder (if configured)
-   * and for every LegendKeeper resource that has child resources.
-   * When a folder hierarchy exceeds Foundry's hard 4-level folder nesting limit,
-   * automatically creates top-level overflow root folders ("LegendKeeper 2", "LegendKeeper 3", ...)
-   * so deeply nested folders continue nesting cleanly without errors or loss of structure.
+   * Ensures a single top-level Foundry JournalEntry Folder exists (e.g. "LegendKeeper")
+   * and cleans up any legacy nested subfolders from earlier versions.
+   * All synced Journals are placed inside this single folder with full path names
+   * ("Ancestor / Parent / Resource"), completely avoiding Foundry's 4-level folder nesting limit.
    */
   async ensureFolderHierarchy(remoteResources = []) {
-    const maxDepth = globalThis.CONST?.FOLDER_MAX_DEPTH ?? 4;
     const configuredRootName = (this.getSetting(SETTINGS.ROOT_FOLDER_NAME, "LegendKeeper") || "").trim();
-    const baseRootName = configuredRootName || "LegendKeeper";
-
     const journalFolders = () => (game.folders ?? []).filter((f) => f.type === "JournalEntry");
     const isTopLevelFolder = (f) => !f.folder && !f._source?.folder;
 
-    const existingFolderByResourceId = new Map();
-    const folderByResourceId = new Map();
-    const depthByFolderId = new Map();
-    const tierByFolderId = new Map();
-    const rootFolderByTier = new Map();
-
-    for (const f of journalFolders()) {
-      const rId = f.getFlag(MODULE_ID, FLAGS.RESOURCE_ID);
-      if (rId) existingFolderByResourceId.set(rId, f);
-    }
-
-    const ensureRootFolderForTier = async (tier = 1) => {
-      if (tier === 1 && !configuredRootName) return null;
-      if (rootFolderByTier.has(tier)) return rootFolderByTier.get(tier);
-
-      const targetName = tier === 1 ? configuredRootName : `${baseRootName} ${tier}`;
-      let root = journalFolders().find((f) => {
+    let rootFolder = null;
+    if (configuredRootName) {
+      rootFolder = journalFolders().find((f) => {
         if (!isTopLevelFolder(f)) return false;
         const isRootFlag = Boolean(f.getFlag(MODULE_ID, FLAGS.IS_ROOT_FOLDER));
         const storedTier = f.getFlag(MODULE_ID, FLAGS.OVERFLOW_TIER) ?? 1;
-        return (isRootFlag && storedTier === tier) || f.name === targetName;
+        return (isRootFlag && storedTier === 1) || f.name === configuredRootName;
       });
 
-      if (!root) {
-        root = await Folder.create({
-          name: targetName,
+      if (!rootFolder) {
+        rootFolder = await Folder.create({
+          name: configuredRootName,
           type: "JournalEntry",
           folder: null,
-          sorting: "m",
+          sorting: "a",
           flags: {
             [MODULE_ID]: {
               [FLAGS.IS_ROOT_FOLDER]: true,
-              [FLAGS.OVERFLOW_TIER]: tier
+              [FLAGS.OVERFLOW_TIER]: 1
             }
           }
         });
-      }
-
-      if (root) {
-        rootFolderByTier.set(tier, root);
-        depthByFolderId.set(root.id, 1);
-        tierByFolderId.set(root.id, tier);
-      }
-      return root;
-    };
-
-    const rootFolder = await ensureRootFolderForTier(1);
-
-    const parentResourceIds = new Set();
-    const remoteById = new Map();
-    for (const res of remoteResources) {
-      remoteById.set(res.id, res);
-      if (res.parentId && res.parentId !== "templates") {
-        parentResourceIds.add(res.parentId);
       }
     }
 
-    const getFolderParentId = (f) =>
-      (typeof f?.folder === "string" ? f.folder : f?.folder?.id) ?? f?._source?.folder ?? null;
+    // Clean up any legacy resource subfolders or overflow folders from earlier sync versions
+    const legacyFolders = journalFolders().filter((f) => {
+      if (rootFolder && f.id === rootFolder.id) return false;
+      const hasResourceFlag = Boolean(f.getFlag(MODULE_ID, FLAGS.RESOURCE_ID));
+      const isOverflowRoot =
+        Boolean(f.getFlag(MODULE_ID, FLAGS.IS_ROOT_FOLDER)) &&
+        (f.getFlag(MODULE_ID, FLAGS.OVERFLOW_TIER) ?? 1) > 1;
+      return hasResourceFlag || isOverflowRoot;
+    });
 
-    const getFolderDepth = (folder) => {
-      if (!folder) return 0;
-      const tracked = depthByFolderId.get(folder.id) ?? 0;
-      const propDepth = typeof folder.depth === "number" && folder.depth > 0 ? folder.depth : 0;
-
-      let walked = 0;
-      let cur = folder;
-      const seen = new Set();
-      while (cur && !seen.has(cur.id)) {
-        seen.add(cur.id);
-        walked++;
-        const parentId = getFolderParentId(cur);
-        cur = parentId ? game.folders?.get?.(parentId) : null;
-      }
-
-      const depth = Math.max(tracked, propDepth, walked, 1);
-      depthByFolderId.set(folder.id, depth);
-      return depth;
-    };
-
-    const getExistingSubtreeDepth = (folder, visited = new Set()) => {
-      if (!folder || visited.has(folder.id)) return 0;
-      visited.add(folder.id);
-      let maxChildDepth = 0;
-      for (const f of journalFolders()) {
-        if (getFolderParentId(f) === folder.id) {
-          maxChildDepth = Math.max(maxChildDepth, 1 + getExistingSubtreeDepth(f, visited));
-        }
-      }
-      return maxChildDepth;
-    };
-
-    const detachDirectChildFolders = async (folder) => {
-      if (!folder) return;
-      for (const f of journalFolders()) {
-        if (getFolderParentId(f) === folder.id) {
-          await f.update({ folder: null });
-          depthByFolderId.set(f.id, 1);
-        }
-      }
-    };
-
-    const getFolderTier = (folder) => {
-      if (!folder) return 1;
-      if (tierByFolderId.has(folder.id)) return tierByFolderId.get(folder.id);
-      const flaggedTier = folder.getFlag?.(MODULE_ID, FLAGS.OVERFLOW_TIER);
-      if (typeof flaggedTier === "number" && flaggedTier >= 1) {
-        tierByFolderId.set(folder.id, flaggedTier);
-        return flaggedTier;
-      }
-      return 1;
-    };
-
-    const createOrUpdateFolderUnderParent = async (res, existingFolder, targetParent, desiredName) => {
-      const desiredParentId = targetParent?.id || null;
-      if (!existingFolder) {
-        const folderData = {
-          name: desiredName,
-          type: "JournalEntry",
-          folder: desiredParentId,
-          sorting: "m",
-          flags: {
-            [MODULE_ID]: {
-              [FLAGS.RESOURCE_ID]: res.id,
-              [FLAGS.PARENT_ID]: res.parentId || null
-            }
+    if (legacyFolders.length > 0) {
+      const legacyIds = new Set(legacyFolders.map((f) => f.id));
+      for (const entry of game.journal ?? []) {
+        const fId = entry.folder?.id ?? entry._source?.folder ?? null;
+        if (fId && legacyIds.has(fId)) {
+          try {
+            await entry.update({ folder: rootFolder?.id || null });
+          } catch {
+            // Ignore move errors during cleanup
           }
-        };
-        if (res.iconColor && /^#[0-9A-Fa-f]{6}$/.test(res.iconColor)) {
-          folderData.color = res.iconColor;
         }
-        return await Folder.create(folderData);
       }
 
-      const currentParentId = getFolderParentId(existingFolder);
-      if (existingFolder.name !== desiredName || currentParentId !== desiredParentId) {
-        const targetParentDepth = getFolderDepth(targetParent);
-        if (
-          currentParentId !== desiredParentId &&
-          targetParentDepth + 1 + getExistingSubtreeDepth(existingFolder) > maxDepth
-        ) {
-          await detachDirectChildFolders(existingFolder);
-        }
-        await existingFolder.update({
-          name: desiredName,
-          folder: desiredParentId
-        });
-      }
-      return existingFolder;
-    };
-
-    const ensureFolderForResource = async (resId, visiting = new Set()) => {
-      if (!resId || !remoteById.has(resId)) return rootFolder;
-      if (folderByResourceId.has(resId)) return folderByResourceId.get(resId);
-      if (visiting.has(resId)) return rootFolder;
-      visiting.add(resId);
-
-      const res = remoteById.get(resId);
-      let parentFolder = rootFolder;
-      let parentRes = null;
-      if (res.parentId && remoteById.has(res.parentId)) {
-        parentRes = remoteById.get(res.parentId);
-        parentFolder = await ensureFolderForResource(res.parentId, visiting);
-      }
-
-      let parentDepth = getFolderDepth(parentFolder);
-      let targetTier = getFolderTier(parentFolder);
-      let isOverflowRootEntry = false;
-
-      if (parentDepth >= maxDepth) {
-        targetTier += 1;
-        parentFolder = await ensureRootFolderForTier(targetTier);
-        parentDepth = getFolderDepth(parentFolder);
-        isOverflowRootEntry = true;
-      }
-
-      const desiredName = (
-        isOverflowRootEntry && parentRes?.name
-          ? `${parentRes.name} ▸ ${res.name}`
-          : res.name
-      ).slice(0, 100);
-
-      let folder =
-        existingFolderByResourceId.get(res.id) ||
-        journalFolders().find((f) => f.getFlag(MODULE_ID, FLAGS.RESOURCE_ID) === res.id);
-
-      try {
-        folder = await createOrUpdateFolderUnderParent(res, folder, parentFolder, desiredName);
-        if (folder) {
-          depthByFolderId.set(folder.id, parentDepth + 1);
-          tierByFolderId.set(folder.id, targetTier);
-        }
-      } catch (err) {
-        // If Foundry rejected the folder (e.g. due to existing sub-tree depth during a move),
-        // spill it over into the next top-level overflow folder ("LegendKeeper 2", "LegendKeeper 3", ...).
+      // Delete deepest legacy folders first so parent deletion doesn't complain
+      const sortedLegacy = [...legacyFolders].sort((a, b) => (b.depth || 1) - (a.depth || 1));
+      for (const f of sortedLegacy) {
         try {
-          const fallbackTier = isOverflowRootEntry ? targetTier : targetTier + 1;
-          const overflowRoot = await ensureRootFolderForTier(fallbackTier);
-          const overflowName = (
-            parentRes?.name ? `${parentRes.name} ▸ ${res.name}` : res.name
-          ).slice(0, 100);
-          folder = await createOrUpdateFolderUnderParent(res, folder, overflowRoot, overflowName);
-          if (folder) {
-            depthByFolderId.set(folder.id, getFolderDepth(overflowRoot) + 1);
-            tierByFolderId.set(folder.id, fallbackTier);
-          }
-        } catch (fallbackErr) {
-          console.warn(
-            `LegendKeeper Sync | Could not place folder "${res.name}" in overflow folder, using parent folder:`,
-            fallbackErr?.message || fallbackErr
-          );
-          folder = parentFolder;
+          await f.delete();
+        } catch {
+          // Ignore delete errors during cleanup
         }
       }
-
-      folderByResourceId.set(res.id, folder || parentFolder);
-      return folder || parentFolder;
-    };
-
-    for (const parentId of parentResourceIds) {
-      await ensureFolderForResource(parentId);
     }
+
+    const pathInfo = this.buildResourcePathInfo(remoteResources);
 
     return {
       rootFolder,
-      folderByResourceId,
-      getTargetFolderForResource: (res) => {
-        if (res.parentId && folderByResourceId.has(res.parentId)) {
-          return folderByResourceId.get(res.parentId);
-        }
-        return rootFolder;
+      pathInfo,
+      getTargetFolderForResource: () => rootFolder,
+      getJournalNameForResource: (res) => {
+        if (!res) return "Untitled";
+        return pathInfo.pathById.get(res.id) || res.name || "Untitled";
       }
     };
+  }
+
+  /**
+   * Creates or updates the pinned "📖 LegendKeeper Wiki Index" JournalEntry inside the root folder,
+   * containing a full collapsible tree of clickable `@UUID` links for the entire LegendKeeper wiki
+   * plus dedicated tabs for each top-level category that has sub-resources.
+   */
+  async ensureWikiIndexJournal(remoteResources = [], localIndex = null, rootFolder = null) {
+    const idx = localIndex || this.buildLocalIndex();
+    const pathInfo = this.buildResourcePathInfo(remoteResources);
+    const { remoteById, childrenByParentId } = pathInfo;
+
+    const escapeHtml = (str) =>
+      String(str ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+
+    const countDescendants = (resId, visited = new Set()) => {
+      if (visited.has(resId)) return 0;
+      visited.add(resId);
+      const children = childrenByParentId.get(resId) || [];
+      let total = children.length;
+      for (const cId of children) {
+        total += countDescendants(cId, visited);
+      }
+      return total;
+    };
+
+    const renderNodeLink = (res) => {
+      const entry = idx.byResourceId.get(res.id);
+      const cleanName = escapeHtml(res.name || "Untitled");
+      const linkHtml = entry
+        ? `@UUID[JournalEntry.${entry.id}]{${cleanName}}`
+        : `<strong>${cleanName}</strong>`;
+      const tags = Array.isArray(res.tags) && res.tags.length > 0
+        ? ` <span class="lk-index-tags">${res.tags.slice(0, 4).map((t) => `<span class="lk-tag-pill">${escapeHtml(t)}</span>`).join(" ")}</span>`
+        : "";
+      return `${linkHtml}${tags}`;
+    };
+
+    const renderSubtreeHtml = (resId, depth = 0, visited = new Set()) => {
+      if (visited.has(resId)) return "";
+      visited.add(resId);
+      const res = remoteById.get(resId);
+      if (!res) return "";
+
+      const childIds = childrenByParentId.get(resId) || [];
+      const linkAndTags = renderNodeLink(res);
+
+      if (childIds.length === 0) {
+        return `<li class="lk-index-leaf" style="margin: 3px 0;"><i class="fas fa-file-alt" style="opacity: 0.65; margin-right: 4px;"></i> ${linkAndTags}</li>`;
+      }
+
+      const descCount = countDescendants(resId);
+      const childrenHtml = childIds
+        .map((cId) => renderSubtreeHtml(cId, depth + 1, new Set(visited)))
+        .join("");
+
+      const openAttr = depth < 2 ? " open" : "";
+      return `<li class="lk-index-branch" style="margin: 5px 0; list-style: none;">
+        <details${openAttr}>
+          <summary style="cursor: pointer; font-weight: 600;">
+            <i class="fas fa-folder-open" style="color: #d9a441; margin-right: 4px;"></i> ${linkAndTags}
+            <small style="opacity: 0.65; font-weight: normal; margin-left: 4px;">(${descCount})</small>
+          </summary>
+          <ul class="lk-wiki-tree" style="margin: 4px 0 6px 18px; padding-left: 10px; border-left: 2px solid rgba(128,128,128,0.25);">
+            ${childrenHtml}
+          </ul>
+        </details>
+      </li>`;
+    };
+
+    const topLevelIds = childrenByParentId.get(null) || [];
+    const fullTreeItemsHtml = topLevelIds
+      .map((id) => renderSubtreeHtml(id, 0, new Set()))
+      .join("");
+
+    const syncedTime = new Date().toLocaleString();
+    const overviewHtml = `<div class="lk-wiki-index" data-lk-generated="true">
+      <div style="padding: 10px 14px; margin-bottom: 12px; border-radius: 6px; background: rgba(0, 0, 0, 0.06); border: 1px solid rgba(128, 128, 128, 0.25);">
+        <h2 style="margin: 0 0 4px 0;">📖 LegendKeeper Wiki Directory</h2>
+        <p style="margin: 0; font-size: 0.9em; opacity: 0.8;">
+          <strong>${remoteResources.length}</strong> articles synced • Last updated: ${escapeHtml(syncedTime)}<br/>
+          <em>Click any article below to open its Journal Entry, or click a folder header to expand/collapse its branch.</em>
+        </p>
+      </div>
+      <ul class="lk-wiki-tree" style="margin: 0; padding-left: 8px; list-style: none;">
+        ${fullTreeItemsHtml || "<li><em>No resources found in LegendKeeper.</em></li>"}
+      </ul>
+    </div>`;
+
+    const desiredPages = [
+      {
+        name: "📖 Full Wiki Tree",
+        sort: 10000,
+        html: overviewHtml
+      }
+    ];
+
+    let sortCounter = 20000;
+    for (const topId of topLevelIds) {
+      const topRes = remoteById.get(topId);
+      const topChildren = childrenByParentId.get(topId) || [];
+      if (!topRes || topChildren.length === 0) continue;
+
+      const branchHtml = `<div class="lk-wiki-index" data-lk-generated="true">
+        <p style="margin: 0 0 10px 0;">
+          <strong>Category Root:</strong> ${renderNodeLink(topRes)}
+        </p>
+        <ul class="lk-wiki-tree" style="margin: 0; padding-left: 8px; list-style: none;">
+          ${topChildren.map((cId) => renderSubtreeHtml(cId, 0, new Set())).join("")}
+        </ul>
+      </div>`;
+
+      desiredPages.push({
+        name: `📂 ${topRes.name}`.slice(0, 100),
+        sort: sortCounter,
+        html: branchHtml
+      });
+      sortCounter += 10000;
+    }
+
+    let indexEntry = (game.journal ?? []).find((j) => j.getFlag(MODULE_ID, FLAGS.IS_INDEX_JOURNAL));
+    if (!indexEntry) {
+      indexEntry = await JournalEntry.create({
+        name: "📖 LegendKeeper Wiki Index",
+        folder: rootFolder?.id || null,
+        sort: 0,
+        flags: {
+          [MODULE_ID]: {
+            [FLAGS.IS_INDEX_JOURNAL]: true
+          }
+        }
+      });
+    } else if (
+      indexEntry.name !== "📖 LegendKeeper Wiki Index" ||
+      (indexEntry.folder?.id || null) !== (rootFolder?.id || null)
+    ) {
+      await indexEntry.update({
+        name: "📖 LegendKeeper Wiki Index",
+        folder: rootFolder?.id || null,
+        sort: 0
+      });
+    }
+
+    const existingPages = Array.from(indexEntry.pages ?? []).sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0));
+    const pagesToUpdate = [];
+    const pagesToCreate = [];
+    const pagesToDelete = [];
+
+    for (let i = 0; i < desiredPages.length; i++) {
+      const dp = desiredPages[i];
+      if (i < existingPages.length) {
+        pagesToUpdate.push({
+          _id: existingPages[i].id,
+          name: dp.name,
+          type: "text",
+          sort: dp.sort,
+          text: { content: dp.html, format: 1 }
+        });
+      } else {
+        pagesToCreate.push({
+          name: dp.name,
+          type: "text",
+          sort: dp.sort,
+          text: { content: dp.html, format: 1 }
+        });
+      }
+    }
+
+    for (let i = desiredPages.length; i < existingPages.length; i++) {
+      pagesToDelete.push(existingPages[i].id);
+    }
+
+    if (pagesToUpdate.length > 0) {
+      await indexEntry.updateEmbeddedDocuments("JournalEntryPage", pagesToUpdate);
+    }
+    if (pagesToCreate.length > 0) {
+      await indexEntry.createEmbeddedDocuments("JournalEntryPage", pagesToCreate);
+    }
+    if (pagesToDelete.length > 0) {
+      await indexEntry.deleteEmbeddedDocuments("JournalEntryPage", pagesToDelete);
+    }
+
+    return indexEntry;
   }
 
   /**
@@ -708,7 +775,7 @@ export class LegendKeeperSyncEngine {
         }
       }
 
-      // Pass 1: Ensure Folders and shell JournalEntries exist for all resources
+      // Pass 1: Ensure the single root Folder and shell JournalEntries exist for all resources
       const folderHelper = await this.ensureFolderHierarchy(sortedResources);
       const localIndex = this.buildLocalIndex();
 
@@ -716,14 +783,17 @@ export class LegendKeeperSyncEngine {
         const item = sortedResources[i];
         if (!localIndex.byResourceId.has(item.id)) {
           const targetFolder = folderHelper.getTargetFolderForResource(item);
+          const displayPathName = folderHelper.getJournalNameForResource(item);
           const ownership = this.#computeJournalOwnership(item.isHidden);
           const entry = await JournalEntry.create({
-            name: item.name,
+            name: displayPathName,
             folder: targetFolder?.id || null,
             ...(ownership ? { ownership } : {}),
             flags: {
               [MODULE_ID]: {
                 [FLAGS.RESOURCE_ID]: item.id,
+                [FLAGS.RESOURCE_NAME]: item.name,
+                [FLAGS.PATH_NAME]: displayPathName,
                 [FLAGS.PARENT_ID]: item.parentId || null
               }
             }
@@ -744,6 +814,8 @@ export class LegendKeeperSyncEngine {
 
         const entry = localIndex.byResourceId.get(listItem.id);
         const wasJustCreated = !entry.getFlag(MODULE_ID, FLAGS.LAST_SYNCED_AT);
+        const expectedPathName = folderHelper.getJournalNameForResource(listItem);
+        const targetFolder = folderHelper.getTargetFolderForResource(listItem);
 
         if (!wasJustCreated) {
           const storedHash = entry.getFlag(MODULE_ID, FLAGS.CONTENT_HASH);
@@ -753,7 +825,22 @@ export class LegendKeeperSyncEngine {
           const localChanged = Boolean(storedHash && currentHash !== storedHash);
 
           if (!remoteChanged && !localChanged && entry.pages?.size > 0) {
-            skipped++;
+            if (entry.name !== expectedPathName || (entry.folder?.id || null) !== (targetFolder?.id || null)) {
+              await entry.update({
+                name: expectedPathName,
+                folder: targetFolder?.id || null,
+                flags: {
+                  [MODULE_ID]: {
+                    [FLAGS.RESOURCE_NAME]: listItem.name,
+                    [FLAGS.PATH_NAME]: expectedPathName
+                  }
+                }
+              });
+              await entry.setFlag(MODULE_ID, FLAGS.CONTENT_HASH, computeJournalHash(entry));
+              updated++;
+            } else {
+              skipped++;
+            }
             continue;
           }
 
@@ -783,6 +870,9 @@ export class LegendKeeperSyncEngine {
         }
       }
 
+      onProgress?.({ phase: "Building LegendKeeper Wiki Index...", current: total, total });
+      await this.ensureWikiIndexJournal(sortedResources, localIndex, folderHelper.rootFolder);
+
       await game.settings.set(MODULE_ID, SETTINGS.LAST_FULL_SYNC, new Date().toISOString());
       return { created, updated, skipped, total };
     } finally {
@@ -810,14 +900,17 @@ export class LegendKeeperSyncEngine {
       if (!entry) {
         const fullRes = await lk.resources.get({ resourceId });
         const targetFolder = folderHelper.getTargetFolderForResource(fullRes);
+        const displayPathName = folderHelper.getJournalNameForResource(fullRes);
         const ownership = this.#computeJournalOwnership(fullRes.isHidden);
         entry = await JournalEntry.create({
-          name: fullRes.name,
+          name: displayPathName,
           folder: targetFolder?.id || null,
           ...(ownership ? { ownership } : {}),
           flags: {
             [MODULE_ID]: {
               [FLAGS.RESOURCE_ID]: fullRes.id,
+              [FLAGS.RESOURCE_NAME]: fullRes.name,
+              [FLAGS.PATH_NAME]: displayPathName,
               [FLAGS.PARENT_ID]: fullRes.parentId || null
             }
           }
@@ -831,6 +924,8 @@ export class LegendKeeperSyncEngine {
         folderHelper,
         childResourceIds
       });
+
+      await this.ensureWikiIndexJournal(remoteResources, localIndex, folderHelper.rootFolder);
 
       return entry;
     } finally {
@@ -1043,15 +1138,18 @@ export class LegendKeeperSyncEngine {
     }
 
     const entryOwnership = this.#computeJournalOwnership(resource.isHidden);
+    const displayPathName = folderHelper.getJournalNameForResource(resource);
     const updatedHash = computeJournalHash(entry);
 
     await entry.update({
-      name: resource.name,
+      name: displayPathName,
       folder: targetFolder?.id || null,
       ...(entryOwnership ? { ownership: entryOwnership } : {}),
       flags: {
         [MODULE_ID]: {
           [FLAGS.RESOURCE_ID]: resource.id,
+          [FLAGS.RESOURCE_NAME]: resource.name,
+          [FLAGS.PATH_NAME]: displayPathName,
           [FLAGS.PARENT_ID]: resource.parentId || null,
           [FLAGS.LK_UPDATED_AT]: resource.updatedAt || new Date().toISOString(),
           [FLAGS.LAST_SYNCED_AT]: Date.now(),
@@ -1088,6 +1186,9 @@ export class LegendKeeperSyncEngine {
    */
   async pushJournal(journalEntry) {
     if (!journalEntry) throw new Error("No JournalEntry provided to push.");
+    if (journalEntry.getFlag(MODULE_ID, FLAGS.IS_INDEX_JOURNAL)) {
+      return null;
+    }
     const lk = this.getClient();
     const conflictPolicy = this.getSetting(SETTINGS.CONFLICT_POLICY, "ask");
     this.isSyncingInternal = true;
@@ -1097,19 +1198,32 @@ export class LegendKeeperSyncEngine {
       const converterContext = this.createConverterContext([], localIndex);
 
       let resourceId = journalEntry.getFlag(MODULE_ID, FLAGS.RESOURCE_ID);
-      const folderResourceId = journalEntry.folder?.getFlag?.(MODULE_ID, FLAGS.RESOURCE_ID) || null;
-      const isRootFolder = Boolean(journalEntry.folder?.getFlag?.(MODULE_ID, FLAGS.IS_ROOT_FOLDER));
-      const folderOverflowTier = journalEntry.folder?.getFlag?.(MODULE_ID, FLAGS.OVERFLOW_TIER) ?? 1;
       const storedParentId = journalEntry.getFlag(MODULE_ID, FLAGS.PARENT_ID) || null;
+      const storedPathName = journalEntry.getFlag(MODULE_ID, FLAGS.PATH_NAME) || "";
+      const storedResourceName = journalEntry.getFlag(MODULE_ID, FLAGS.RESOURCE_NAME) || "";
 
+      const rawSegments = String(journalEntry.name || "Untitled")
+        .split(/\s*(?:\/|▸)\s*/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const leafName = rawSegments[rawSegments.length - 1] || journalEntry.name || "Untitled";
+      const parentPathPrefix = rawSegments.slice(0, -1).join(" / ");
+
+      let desiredResourceName = leafName;
       let targetParentId = storedParentId;
-      if (journalEntry.folder) {
-        if (isRootFolder && folderOverflowTier === 1) {
-          targetParentId = null;
-        } else if (folderResourceId && folderResourceId !== resourceId) {
-          targetParentId = folderResourceId;
+
+      if (resourceId && journalEntry.name === storedPathName && storedResourceName) {
+        desiredResourceName = storedResourceName;
+        targetParentId = storedParentId;
+      } else if (parentPathPrefix) {
+        const matchingParentEntry = Array.from(localIndex.byResourceId.values()).find((e) => {
+          const pName = e.getFlag(MODULE_ID, FLAGS.PATH_NAME) || e.name;
+          return pName.toLowerCase() === parentPathPrefix.toLowerCase();
+        });
+        if (matchingParentEntry) {
+          targetParentId = matchingParentEntry.getFlag(MODULE_ID, FLAGS.RESOURCE_ID) || storedParentId;
         }
-      } else {
+      } else if (!resourceId) {
         targetParentId = null;
       }
 
@@ -1133,7 +1247,7 @@ export class LegendKeeperSyncEngine {
       if (!resourceId) {
         isNewResource = true;
         const createPayload = {
-          name: journalEntry.name
+          name: desiredResourceName
         };
         if (targetParentId) createPayload.parentId = targetParentId;
         if (Array.isArray(tags) && tags.length > 0) createPayload.tags = tags;
@@ -1144,7 +1258,7 @@ export class LegendKeeperSyncEngine {
         localIndex.byResourceId.set(resourceId, journalEntry);
       } else {
         const patch = {};
-        if (remoteResource.name !== journalEntry.name) patch.name = journalEntry.name;
+        if (remoteResource.name !== desiredResourceName) patch.name = desiredResourceName;
         if (Object.keys(patch).length > 0) {
           remoteResource = await lk.resources.update({ resourceId }, patch);
         }
@@ -1340,6 +1454,8 @@ export class LegendKeeperSyncEngine {
         flags: {
           [MODULE_ID]: {
             [FLAGS.RESOURCE_ID]: resourceId,
+            [FLAGS.RESOURCE_NAME]: finalRemote.name,
+            [FLAGS.PATH_NAME]: journalEntry.name,
             [FLAGS.PARENT_ID]: finalRemote.parentId || null,
             [FLAGS.LK_UPDATED_AT]: finalRemote.updatedAt || new Date().toISOString(),
             [FLAGS.LAST_SYNCED_AT]: Date.now(),

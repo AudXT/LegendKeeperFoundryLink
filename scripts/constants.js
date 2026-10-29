@@ -1,5 +1,5 @@
 export const MODULE_ID = "legendkeeper-foundry-sync";
-export const MODULE_VERSION = "1.1.3";
+export const MODULE_VERSION = "1.2.0";
 
 export const SETTINGS = {
   API_KEY: "apiKey",
@@ -18,6 +18,8 @@ export const SETTINGS = {
 
 export const FLAGS = {
   RESOURCE_ID: "resourceId",
+  RESOURCE_NAME: "resourceName",
+  PATH_NAME: "pathName",
   PARENT_ID: "parentId",
   DOCUMENT_ID: "documentId",
   DOCUMENT_TYPE: "documentType",
@@ -39,6 +41,7 @@ export const FLAGS = {
   PRESERVED_BLOCKS: "preservedBlocks",
   IS_ROOT_FOLDER: "isRootFolder",
   OVERFLOW_TIER: "overflowTier",
+  IS_INDEX_JOURNAL: "isIndexJournal",
   ASSET_MAP: "assetMap"
 };
 
