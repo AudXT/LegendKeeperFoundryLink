@@ -18,6 +18,7 @@ import https from "node:https";
 import { URL } from "node:url";
 
 const PORT = Number(process.env.LK_PROXY_PORT || 8787);
+const HOST = process.env.LK_PROXY_HOST || "0.0.0.0";
 const TARGET_ORIGIN = (process.env.LK_TARGET_ORIGIN || "https://www.legendkeeper.com").replace(/\/+$/, "");
 
 const CORS_HEADERS = {
@@ -88,6 +89,6 @@ const server = http.createServer((req, res) => {
   req.pipe(proxyReq, { end: true });
 });
 
-server.listen(PORT, "127.0.0.1", () => {
-  console.log(`LegendKeeper CORS Proxy listening on http://localhost:${PORT} -> ${TARGET_ORIGIN}`);
+server.listen(PORT, HOST, () => {
+  console.log(`LegendKeeper CORS Proxy listening on http://${HOST}:${PORT} -> ${TARGET_ORIGIN}`);
 });
