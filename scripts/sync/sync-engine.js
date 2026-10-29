@@ -1,17 +1,17 @@
-import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.2.0";
+import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.2.1";
 import {
   LegendKeeper,
   NotFoundError,
   VersionMismatchError
-} from "../sdk/client.js?v=1.2.0";
+} from "../sdk/client.js?v=1.2.1";
 import {
   blocksToHtml,
   renderResourceDecorationHtml,
   renderMapDocumentHtml,
   renderTimelineDocumentHtml
-} from "../converter/blocks-to-html.js?v=1.2.0";
-import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.2.0";
-import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.2.0";
+} from "../converter/blocks-to-html.js?v=1.2.1";
+import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.2.1";
+import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.2.1";
 
 /**
  * Computes a deterministic string hash (FNV-1a 32-bit hex) for detecting local journal modifications
@@ -512,6 +512,20 @@ export class LegendKeeperSyncEngine {
       }
     }
 
+    const isDescendantOfRoot = (f) => {
+      if (!rootFolder || !f) return false;
+      let cur = f;
+      const seen = new Set();
+      while (cur && !seen.has(cur.id)) {
+        seen.add(cur.id);
+        const pId = (typeof cur.folder === "string" ? cur.folder : cur.folder?.id) ?? cur._source?.folder ?? null;
+        if (!pId) return false;
+        if (pId === rootFolder.id) return true;
+        cur = game.folders?.get?.(pId) || null;
+      }
+      return false;
+    };
+
     // Clean up any legacy resource subfolders or overflow folders from earlier sync versions
     const legacyFolders = journalFolders().filter((f) => {
       if (rootFolder && f.id === rootFolder.id) return false;
@@ -519,7 +533,7 @@ export class LegendKeeperSyncEngine {
       const isOverflowRoot =
         Boolean(f.getFlag(MODULE_ID, FLAGS.IS_ROOT_FOLDER)) &&
         (f.getFlag(MODULE_ID, FLAGS.OVERFLOW_TIER) ?? 1) > 1;
-      return hasResourceFlag || isOverflowRoot;
+      return hasResourceFlag || isOverflowRoot || isDescendantOfRoot(f);
     });
 
     if (legacyFolders.length > 0) {

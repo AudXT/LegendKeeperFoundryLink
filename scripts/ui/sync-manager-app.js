@@ -1,4 +1,4 @@
-import { MODULE_ID, MODULE_VERSION } from "../constants.js?v=1.2.0";
+import { MODULE_ID, MODULE_VERSION } from "../constants.js?v=1.2.1";
 
 const BaseApp = globalThis.foundry?.applications?.api?.ApplicationV2
   ? globalThis.foundry.applications.api.HandlebarsApplicationMixin(
