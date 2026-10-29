@@ -10,6 +10,16 @@ A Foundry VTT (v12 / v13) module that provides **two-way synchronization** betwe
 
 ---
 
+## Screenshots
+
+### LegendKeeper Sync Manager Dashboard
+![LegendKeeper Sync Manager](docs/images/sync-manager.png)
+
+### Auto-Generated `📖 LegendKeeper Wiki Index` Journal
+![LegendKeeper Wiki Index](docs/images/wiki-index.jpg)
+
+---
+
 ## Features
 
 - **Two-Way Sync (Pull & Push) with Conflict Resolution**:
@@ -123,6 +133,9 @@ To preserve your LegendKeeper organization cleanly without ever hitting Foundry'
                  └── Dock Ward / The Yawning Portal / Undermountain Entrance
      ```
    - The module stores the true unprefixed LegendKeeper article name in module flags (`flags.legendkeeper-foundry-sync.resourceName`), so pushing a deeply nested Journal back to LegendKeeper will **not** overwrite its LegendKeeper title with the path prefix.
+
+   ![4-Level Folder Depth Workaround in Foundry Sidebar](docs/images/folder-hierarchy.png)
+
 3. **Auto-Generated `📖 LegendKeeper Wiki Index`**:
    - On every pull, the module also creates/updates a master **`📖 LegendKeeper Wiki Index`** Journal Entry pinned at the top of the `LegendKeeper` root folder. This index displays your full LegendKeeper tree to arbitrary depth using indented, clickable `@UUID[JournalEntry...]` links.
 
