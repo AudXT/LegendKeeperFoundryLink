@@ -579,3 +579,61 @@
   height: 100%;
   border-radius: 4px;
 }
+
+/* ==========================================================================
+   Conflict Resolution Dialog
+   ========================================================================== */
+
+.lk-conflict-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.lk-conflict-intro {
+  margin: 0;
+  padding: 8px 10px;
+  background: rgba(231, 76, 60, 0.14);
+  border-left: 3px solid #e74c3c;
+  border-radius: 4px;
+}
+
+.lk-conflict-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.lk-conflict-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.lk-conflict-col h4 {
+  margin: 0 0 4px 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.lk-conflict-preview {
+  margin: 0;
+  padding: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.15);
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-radius: 4px;
+}
+
+.lk-conflict-question {
+  margin: 2px 0 0 0;
+  font-weight: 600;
+  text-align: center;
+}
+

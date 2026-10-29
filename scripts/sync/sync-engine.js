@@ -11,6 +11,7 @@ import {
   renderTimelineDocumentHtml
 } from "../converter/blocks-to-html.js";
 import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js";
+import { promptPageConflictResolution } from "../ui/conflict-dialog.js";
 
 /**
  * Computes a deterministic string hash (FNV-1a 32-bit hex) for detecting local journal modifications
@@ -45,6 +46,15 @@ export function stripGeneratedHtml(html) {
 }
 
 /**
+ * Computes a deterministic content hash for a single Foundry JournalEntryPage.
+ */
+export function computePageHash(page) {
+  if (!page) return "";
+  const body = stripGeneratedHtml(page.text?.content || "");
+  return computeContentHash(`${page.name || "Main"}|${body}`);
+}
+
+/**
  * Computes a combined content hash for a Foundry JournalEntry and all its pages.
  */
 export function computeJournalHash(journalEntry) {
@@ -52,8 +62,7 @@ export function computeJournalHash(journalEntry) {
   const pages = Array.from(journalEntry.pages ?? []).sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0));
   const pageSignatures = pages.map((p) => {
     const docId = p.getFlag(MODULE_ID, FLAGS.DOCUMENT_ID) || "";
-    const body = stripGeneratedHtml(p.text?.content || "");
-    return `${docId}:${p.name}:${body}`;
+    return `${docId}:${computePageHash(p)}`;
   });
   const folderResourceId = journalEntry.folder?.getFlag?.(MODULE_ID, FLAGS.RESOURCE_ID) || "";
   return computeContentHash(`${journalEntry.name}|${folderResourceId}|${pageSignatures.join("||")}`);
@@ -207,7 +216,6 @@ export class LegendKeeperSyncEngine {
 
     const resolveUuidToLk = (uuid) => {
       if (!uuid || typeof uuid !== "string") return null;
-      // Format: JournalEntry.<entryId> or JournalEntry.<entryId>.JournalEntryPage.<pageId>
       const m = /^JournalEntry\.([^.]+)(?:\.JournalEntryPage\.([^.]+))?/.exec(uuid.trim());
       if (!m) return null;
       const entryId = m[1];
@@ -318,7 +326,6 @@ export class LegendKeeperSyncEngine {
 
     const items = [];
 
-    // 1. All remote resources (and their linked Foundry JournalEntries if present)
     for (const res of remoteResources) {
       const localEntry = byResourceId.get(res.id);
       const parentName = res.parentId && remoteById.has(res.parentId) ? remoteById.get(res.parentId).name : "";
@@ -370,7 +377,6 @@ export class LegendKeeperSyncEngine {
       });
     }
 
-    // 2. Local journals that are either unlinked OR linked to a deleted remote resource
     for (const [resId, entry] of byResourceId.entries()) {
       if (!remoteById.has(resId)) {
         items.push({
@@ -452,7 +458,6 @@ export class LegendKeeperSyncEngine {
       }
     }
 
-    // Identify all resource IDs that act as parents to at least one other resource
     const parentResourceIds = new Set();
     const remoteById = new Map();
     for (const res of remoteResources) {
@@ -490,10 +495,8 @@ export class LegendKeeperSyncEngine {
         parentFolder = await ensureFolderForResource(res.parentId, visiting);
       }
 
-      // Check Foundry folder depth limit
       const parentDepth = getFolderDepth(parentFolder);
       if (parentDepth >= maxDepth) {
-        // Cannot nest further in Foundry; reuse deepest allowed ancestor folder
         folderByResourceId.set(resId, parentFolder);
         return parentFolder;
       }
@@ -547,11 +550,12 @@ export class LegendKeeperSyncEngine {
 
   /**
    * Pulls all resources from LegendKeeper into Foundry VTT using a 2-pass strategy
-   * so all cross-resource `@UUID` mentions resolve cleanly.
+   * so all cross-resource `@UUID` mentions resolve cleanly, while checking per-page
+   * local modifications to prevent accidental overwrites.
    */
   async pullAll({ onProgress } = {}) {
     const lk = this.getClient();
-    const conflictPolicy = this.getSetting(SETTINGS.CONFLICT_POLICY, "preferLK");
+    const conflictPolicy = this.getSetting(SETTINGS.CONFLICT_POLICY, "ask");
 
     this.isSyncingInternal = true;
     let created = 0;
@@ -563,7 +567,6 @@ export class LegendKeeperSyncEngine {
       const remoteList = await this.fetchAllRemoteResources();
       const total = remoteList.length;
 
-      // Build parent -> children map in tree rank order
       const childrenByParentId = new Map();
       const sortedResources = [...remoteList].sort((a, b) => ((a.rank ?? "") < (b.rank ?? "") ? -1 : 1));
       for (const r of sortedResources) {
@@ -623,20 +626,30 @@ export class LegendKeeperSyncEngine {
             continue;
           }
 
+          if (localChanged && !remoteChanged && entry.pages?.size > 0) {
+            // Only local Foundry changed; do not overwrite local edits on pullAll!
+            skipped++;
+            continue;
+          }
+
           if (localChanged && remoteChanged && conflictPolicy === "skip") {
             skipped++;
             continue;
           }
         }
 
-        await this.#pullSingleResourceIntoEntry(lk, listItem.id, entry, {
+        const resResult = await this.#pullSingleResourceIntoEntry(lk, listItem.id, entry, {
           remoteResources: sortedResources,
           localIndex,
           folderHelper,
           childResourceIds: childrenByParentId.get(listItem.id) || []
         });
 
-        if (!wasJustCreated) updated++;
+        if (resResult?.abandoned) {
+          skipped++;
+        } else if (!wasJustCreated) {
+          updated++;
+        }
       }
 
       await game.settings.set(MODULE_ID, SETTINGS.LAST_FULL_SYNC, new Date().toISOString());
@@ -703,17 +716,22 @@ export class LegendKeeperSyncEngine {
     return null;
   }
 
-  async #pullSingleResourceIntoEntry(lk, resourceId, entry, { remoteResources, localIndex, folderHelper, childResourceIds }) {
+  async #pullSingleResourceIntoEntry(
+    lk,
+    resourceId,
+    entry,
+    { remoteResources, localIndex, folderHelper, childResourceIds }
+  ) {
     const resource = await lk.resources.get({ resourceId });
     const targetFolder = folderHelper.getTargetFolderForResource(resource);
     const hiddenHandling = this.getSetting(SETTINGS.HIDDEN_RESOURCE_HANDLING, "gmOnly");
     const includeSidebarProperties = this.getSetting(SETTINGS.INCLUDE_SIDEBAR_PROPERTIES, true);
     const includeNavigationLinks = this.getSetting(SETTINGS.INCLUDE_NAVIGATION_LINKS, true);
     const secretHandling = this.getSetting(SETTINGS.SECRET_HANDLING, "secretBlock");
+    const conflictPolicy = this.getSetting(SETTINGS.CONFLICT_POLICY, "ask");
 
     const converterContext = this.createConverterContext(remoteResources, localIndex);
 
-    // Sort documents by rank
     const docs = [...(resource.documents || [])]
       .filter((d) => !(hiddenHandling === "skip" && d.isHidden))
       .sort((a, b) => ((a.rank ?? "") < (b.rank ?? "") ? -1 : 1));
@@ -735,11 +753,13 @@ export class LegendKeeperSyncEngine {
 
     const pagesToCreate = [];
     const pagesToUpdate = [];
+    let abandonedAny = false;
 
     for (let idx = 0; idx < docs.length; idx++) {
       const doc = docs[idx];
       const isPrimaryPage = idx === 0;
       const sortValue = (idx + 1) * 10000;
+      const existingPage = existingPagesByDocId.get(doc.id);
 
       let pageHtml = "";
       let blockVersion = null;
@@ -751,6 +771,69 @@ export class LegendKeeperSyncEngine {
           documentId: doc.id
         });
         blockVersion = docBlocks.version;
+
+        // Check for page-level conflict before overwriting an existing Foundry page!
+        if (existingPage) {
+          const storedVersion = existingPage.getFlag(MODULE_ID, FLAGS.VERSION);
+          const storedPageHash = existingPage.getFlag(MODULE_ID, FLAGS.PAGE_HASH);
+          const currentPageHash = computePageHash(existingPage);
+
+          const localChanged = Boolean(storedPageHash && currentPageHash !== storedPageHash);
+          const remoteChanged = !storedVersion || storedVersion !== blockVersion;
+
+          if (localChanged && !remoteChanged) {
+            // Only Foundry modified this page; preserve local Foundry edits instead of overwriting with older LK page!
+            continue;
+          }
+
+          if (localChanged && remoteChanged) {
+            if (conflictPolicy === "skip") {
+              abandonedAny = true;
+              continue;
+            }
+            if (conflictPolicy === "ask") {
+              const decision = await promptPageConflictResolution({
+                resourceName: resource.name,
+                pageName: doc.name || existingPage.name || "Main",
+                remoteText: docBlocks.text || "",
+                localHtml: existingPage.text?.content || "",
+                operation: "pull"
+              });
+
+              if (decision === "cancel") {
+                abandonedAny = true;
+                ui.notifications?.warn(
+                  `Skipped syncing "${resource.name} → ${doc.name || existingPage.name}" due to conflict.`
+                );
+                continue;
+              }
+
+              if (decision === "keep-foundry") {
+                // Push the Foundry version of this page to LegendKeeper instead!
+                const preserved = existingPage.getFlag(MODULE_ID, FLAGS.PRESERVED_BLOCKS) || [];
+                const blocksToPush = await htmlToBlocks(existingPage.text?.content || "", {
+                  ...converterContext,
+                  preservedBlocks: preserved
+                });
+                const written = await lk.documents.replaceBlocks(
+                  { resourceId: resource.id, documentId: doc.id },
+                  { blocks: blocksToPush, ifMatch: blockVersion }
+                );
+                await existingPage.update({
+                  flags: {
+                    [MODULE_ID]: {
+                      [FLAGS.VERSION]: written.version,
+                      [FLAGS.PAGE_HASH]: computePageHash(existingPage)
+                    }
+                  }
+                });
+                continue;
+              }
+              // Otherwise decision === "keep-lk": proceed to overwrite Foundry page with LK version below.
+            }
+          }
+        }
+
         const bodyHtml = blocksToHtml(docBlocks.blocks || [], {
           ...converterContext,
           currentResourceId: resource.id,
@@ -779,22 +862,25 @@ export class LegendKeeperSyncEngine {
         pageHtml = isPrimaryPage ? `${headerHtml}${fallbackHtml}${footerHtml}` : fallbackHtml;
       }
 
+      const pageName = doc.name || "Main";
+      const newPageHash = computeContentHash(`${pageName}|${stripGeneratedHtml(pageHtml)}`);
+
       const pageFlags = {
         [FLAGS.RESOURCE_ID]: resource.id,
         [FLAGS.DOCUMENT_ID]: doc.id,
         [FLAGS.DOCUMENT_TYPE]: doc.type,
         [FLAGS.VERSION]: blockVersion,
+        [FLAGS.PAGE_HASH]: newPageHash,
         [FLAGS.IS_HIDDEN]: Boolean(doc.isHidden),
         [FLAGS.PRESERVED_BLOCKS]: strippedBlocks
       };
 
       const pageOwnership = this.#computeJournalOwnership(doc.isHidden);
-      const existingPage = existingPagesByDocId.get(doc.id);
 
       if (existingPage) {
         pagesToUpdate.push({
           _id: existingPage.id,
-          name: doc.name || "Main",
+          name: pageName,
           type: "text",
           sort: sortValue,
           text: { content: pageHtml, format: 1 },
@@ -803,7 +889,7 @@ export class LegendKeeperSyncEngine {
         });
       } else {
         pagesToCreate.push({
-          name: doc.name || "Main",
+          name: pageName,
           type: "text",
           sort: sortValue,
           text: { content: pageHtml, format: 1 },
@@ -825,7 +911,6 @@ export class LegendKeeperSyncEngine {
       await entry.updateEmbeddedDocuments("JournalEntryPage", pagesToUpdate);
     }
 
-    // Update JournalEntry metadata & flags
     const entryOwnership = this.#computeJournalOwnership(resource.isHidden);
     const updatedHash = computeJournalHash(entry);
 
@@ -854,19 +939,26 @@ export class LegendKeeperSyncEngine {
       }
     });
 
-    // Recompute hash after name/folder update to ensure exact match
     const finalHash = computeJournalHash(entry);
     if (finalHash !== updatedHash) {
       await entry.setFlag(MODULE_ID, FLAGS.CONTENT_HASH, finalHash);
     }
+
+    return { abandoned: abandonedAny };
   }
 
   /**
-   * Pushes a single Foundry JournalEntry (and all its text JournalEntryPages) to LegendKeeper.
+   * Pushes a single Foundry JournalEntry (and its text JournalEntryPages) to LegendKeeper.
+   * Always fetches the current LegendKeeper state first:
+   * - Any remote pages that changed in LK while untouched in Foundry are automatically pulled into Foundry.
+   * - Any remote tabs created in LK that don't exist in Foundry yet are pulled into Foundry.
+   * - If both LK and Foundry modified the exact same page, prompts the GM (or follows the conflict policy)
+   *   so neither side is ever silently overwritten.
    */
   async pushJournal(journalEntry) {
     if (!journalEntry) throw new Error("No JournalEntry provided to push.");
     const lk = this.getClient();
+    const conflictPolicy = this.getSetting(SETTINGS.CONFLICT_POLICY, "ask");
     this.isSyncingInternal = true;
 
     try {
@@ -878,7 +970,6 @@ export class LegendKeeperSyncEngine {
       const isRootFolder = Boolean(journalEntry.folder?.getFlag?.(MODULE_ID, FLAGS.IS_ROOT_FOLDER));
       const storedParentId = journalEntry.getFlag(MODULE_ID, FLAGS.PARENT_ID) || null;
 
-      // Determine target parentId in LegendKeeper
       let targetParentId = storedParentId;
       if (journalEntry.folder) {
         if (isRootFolder) {
@@ -894,6 +985,7 @@ export class LegendKeeperSyncEngine {
       const aliases = journalEntry.getFlag(MODULE_ID, FLAGS.ALIASES) || [];
 
       let remoteResource = null;
+      let isNewResource = false;
       if (resourceId) {
         try {
           remoteResource = await lk.resources.get({ resourceId });
@@ -906,8 +998,8 @@ export class LegendKeeperSyncEngine {
         }
       }
 
-      // Create resource if not yet in LegendKeeper
       if (!resourceId) {
+        isNewResource = true;
         const createPayload = {
           name: journalEntry.name
         };
@@ -919,14 +1011,12 @@ export class LegendKeeperSyncEngine {
         resourceId = remoteResource.id;
         localIndex.byResourceId.set(resourceId, journalEntry);
       } else {
-        // Update resource name/tags/aliases if changed
         const patch = {};
         if (remoteResource.name !== journalEntry.name) patch.name = journalEntry.name;
         if (Object.keys(patch).length > 0) {
           remoteResource = await lk.resources.update({ resourceId }, patch);
         }
 
-        // Move resource if parentId changed
         const currentRemoteParent = remoteResource.parentId || null;
         if (currentRemoteParent !== (targetParentId || null)) {
           remoteResource = await lk.resources.move(
@@ -936,7 +1026,6 @@ export class LegendKeeperSyncEngine {
         }
       }
 
-      // Sync JournalEntryPages -> LegendKeeper Documents
       const remoteDocs = [...(remoteResource.documents || [])].sort((a, b) =>
         (a.rank ?? "") < (b.rank ?? "") ? -1 : 1
       );
@@ -945,26 +1034,25 @@ export class LegendKeeperSyncEngine {
 
       const sortedPages = Array.from(journalEntry.pages ?? []).sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0));
 
-      // If the Foundry JournalEntry has 0 pages, ensure the initial LK blank document is left intact
       for (let i = 0; i < sortedPages.length; i++) {
         const page = sortedPages[i];
         if (page.type !== "text") continue;
 
         const docTypeFlag = page.getFlag(MODULE_ID, FLAGS.DOCUMENT_TYPE);
         if (docTypeFlag && docTypeFlag !== "page" && docTypeFlag !== "blank") {
-          // Do not overwrite map/timeline/board documents with text blocks
           continue;
         }
 
         let docId = page.getFlag(MODULE_ID, FLAGS.DOCUMENT_ID);
         let remoteDoc = docId ? remoteDocsById.get(docId) : null;
+        let isNewlyPairedDoc = false;
 
-        // Pair with the initial blank/first document on a newly created resource
-        if (!remoteDoc && i === 0 && remoteDocs.length > 0 && !usedRemoteDocIds.has(remoteDocs[0].id)) {
+        if (!remoteDoc && i === 0 && isNewResource && remoteDocs.length > 0 && !usedRemoteDocIds.has(remoteDocs[0].id)) {
           const candidate = remoteDocs[0];
           if (candidate.type === "blank" || candidate.type === "page") {
             remoteDoc = candidate;
             docId = candidate.id;
+            isNewlyPairedDoc = true;
           }
         }
 
@@ -978,14 +1066,76 @@ export class LegendKeeperSyncEngine {
           );
           docId = remoteDoc.id;
           remoteDocsById.set(docId, remoteDoc);
-        } else if (remoteDoc.name !== page.name && page.name) {
-          remoteDoc = await lk.documents.update(
+          isNewlyPairedDoc = true;
+        }
+
+        usedRemoteDocIds.add(docId);
+
+        // Fetch current blocks & version from LegendKeeper first before writing!
+        const remoteDocBlocks = await lk.documents.getBlocks({ resourceId, documentId: docId });
+        const storedVersion = page.getFlag(MODULE_ID, FLAGS.VERSION);
+        const storedPageHash = page.getFlag(MODULE_ID, FLAGS.PAGE_HASH);
+        const currentPageHash = computePageHash(page);
+
+        const remoteChanged = Boolean(
+          !isNewlyPairedDoc && storedVersion && remoteDocBlocks.version !== storedVersion
+        );
+        const localChanged = Boolean(
+          isNewlyPairedDoc || !storedPageHash || currentPageHash !== storedPageHash
+        );
+
+        // Case 1: Neither LegendKeeper nor Foundry changed this page
+        if (!localChanged && !remoteChanged) {
+          if (remoteDoc.name !== page.name && page.name) {
+            await lk.documents.update({ resourceId, documentId: docId }, { name: page.name.slice(0, 500) });
+          }
+          continue;
+        }
+
+        // Case 2: LegendKeeper changed this page, and Foundry did NOT change this page -> Pull LK into Foundry!
+        if (!localChanged && remoteChanged) {
+          await this.#applyRemoteBlocksToLocalPage(page, resourceId, remoteDoc, remoteDocBlocks, converterContext);
+          continue;
+        }
+
+        // Case 3: Both LegendKeeper and Foundry changed this exact page -> Conflict!
+        if (localChanged && remoteChanged) {
+          let decision = "keep-foundry";
+          if (conflictPolicy === "skip") {
+            decision = "cancel";
+          } else if (conflictPolicy === "preferLK") {
+            decision = "keep-lk";
+          } else {
+            decision = await promptPageConflictResolution({
+              resourceName: journalEntry.name,
+              pageName: page.name || remoteDoc.name || "Main",
+              remoteText: remoteDocBlocks.text || "",
+              localHtml: page.text?.content || "",
+              operation: "push"
+            });
+          }
+
+          if (decision === "cancel") {
+            ui.notifications?.warn(
+              `Skipped syncing "${journalEntry.name} → ${page.name}" (conflict left untouched).`
+            );
+            continue;
+          }
+
+          if (decision === "keep-lk") {
+            await this.#applyRemoteBlocksToLocalPage(page, resourceId, remoteDoc, remoteDocBlocks, converterContext);
+            continue;
+          }
+          // Otherwise decision === "keep-foundry": proceed to push Foundry's blocks to LegendKeeper below.
+        }
+
+        // Case 4: Push Foundry's page blocks to LegendKeeper
+        if (remoteDoc.name !== page.name && page.name) {
+          await lk.documents.update(
             { resourceId, documentId: docId },
             { name: page.name.slice(0, 500) }
           );
         }
-
-        usedRemoteDocIds.add(docId);
 
         const preservedBlocks = page.getFlag(MODULE_ID, FLAGS.PRESERVED_BLOCKS) || [];
         const blocks = await htmlToBlocks(page.text?.content || "", {
@@ -993,31 +1143,13 @@ export class LegendKeeperSyncEngine {
           preservedBlocks
         });
 
-        const storedVersion = page.getFlag(MODULE_ID, FLAGS.VERSION) || undefined;
-        let written;
-        try {
-          written = await lk.documents.replaceBlocks(
-            { resourceId, documentId: docId },
-            {
-              blocks,
-              ...(storedVersion ? { ifMatch: storedVersion } : {})
-            }
-          );
-        } catch (err) {
-          if (err instanceof VersionMismatchError) {
-            // Fetch fresh version and apply replaceBlocks
-            const fresh = await lk.documents.getBlocks({ resourceId, documentId: docId });
-            written = await lk.documents.replaceBlocks(
-              { resourceId, documentId: docId },
-              {
-                blocks,
-                ifMatch: fresh.version
-              }
-            );
-          } else {
-            throw err;
+        const written = await lk.documents.replaceBlocks(
+          { resourceId, documentId: docId },
+          {
+            blocks,
+            ifMatch: remoteDocBlocks.version
           }
-        }
+        );
 
         await page.update({
           flags: {
@@ -1025,13 +1157,50 @@ export class LegendKeeperSyncEngine {
               [FLAGS.RESOURCE_ID]: resourceId,
               [FLAGS.DOCUMENT_ID]: docId,
               [FLAGS.DOCUMENT_TYPE]: "page",
-              [FLAGS.VERSION]: written.version
+              [FLAGS.VERSION]: written.version,
+              [FLAGS.PAGE_HASH]: computePageHash(page)
             }
           }
         });
       }
 
-      // Fetch updated resource from LK so we record the latest updatedAt timestamp
+      // Also pull any remote documents on this resource that don't exist in Foundry yet
+      for (const remoteDoc of remoteDocs) {
+        if (usedRemoteDocIds.has(remoteDoc.id)) continue;
+        if (remoteDoc.type === "page" || remoteDoc.type === "blank") {
+          const remoteDocBlocks = await lk.documents.getBlocks({
+            resourceId,
+            documentId: remoteDoc.id
+          });
+          const strippedBlocks = [];
+          const bodyHtml = blocksToHtml(remoteDocBlocks.blocks || [], {
+            ...converterContext,
+            currentResourceId: resourceId,
+            strippedBlocks
+          });
+          const pageName = remoteDoc.name || "Page";
+          const pageHash = computeContentHash(`${pageName}|${stripGeneratedHtml(bodyHtml)}`);
+          await journalEntry.createEmbeddedDocuments("JournalEntryPage", [
+            {
+              name: pageName,
+              type: "text",
+              sort: (journalEntry.pages.size + 1) * 10000,
+              text: { content: bodyHtml, format: 1 },
+              flags: {
+                [MODULE_ID]: {
+                  [FLAGS.RESOURCE_ID]: resourceId,
+                  [FLAGS.DOCUMENT_ID]: remoteDoc.id,
+                  [FLAGS.DOCUMENT_TYPE]: remoteDoc.type,
+                  [FLAGS.VERSION]: remoteDocBlocks.version,
+                  [FLAGS.PAGE_HASH]: pageHash,
+                  [FLAGS.PRESERVED_BLOCKS]: strippedBlocks
+                }
+              }
+            }
+          ]);
+        }
+      }
+
       const finalRemote = await lk.resources.get({ resourceId });
       const finalHash = computeJournalHash(journalEntry);
 
@@ -1053,16 +1222,39 @@ export class LegendKeeperSyncEngine {
     }
   }
 
+  async #applyRemoteBlocksToLocalPage(page, resourceId, remoteDoc, remoteDocBlocks, converterContext) {
+    const strippedBlocks = [];
+    const bodyHtml = blocksToHtml(remoteDocBlocks.blocks || [], {
+      ...converterContext,
+      currentResourceId: resourceId,
+      strippedBlocks
+    });
+    const pageName = remoteDoc.name || page.name || "Main";
+    const newPageHash = computeContentHash(`${pageName}|${stripGeneratedHtml(bodyHtml)}`);
+
+    await page.update({
+      name: pageName,
+      text: { content: bodyHtml, format: 1 },
+      flags: {
+        [MODULE_ID]: {
+          [FLAGS.RESOURCE_ID]: resourceId,
+          [FLAGS.DOCUMENT_ID]: remoteDoc.id,
+          [FLAGS.DOCUMENT_TYPE]: "page",
+          [FLAGS.VERSION]: remoteDocBlocks.version,
+          [FLAGS.PAGE_HASH]: newPageHash,
+          [FLAGS.PRESERVED_BLOCKS]: strippedBlocks
+        }
+      }
+    });
+  }
+
   /**
    * Pushes multiple Foundry JournalEntries to LegendKeeper.
-   *
-   * @param {Object} options
-   * @param {boolean} options.includeUnlinked - Whether to also push local-only unlinked journals
-   * @param {Function} options.onProgress - Progress callback
+   * Pulls any remote-newer entries first if they have no local edits, and prompts on conflicts.
    */
   async pushAll({ includeUnlinked = false, onProgress } = {}) {
     const overview = await this.getSyncOverview();
-    const conflictPolicy = this.getSetting(SETTINGS.CONFLICT_POLICY, "preferLK");
+    const conflictPolicy = this.getSetting(SETTINGS.CONFLICT_POLICY, "ask");
 
     const targets = overview.items.filter((item) => {
       if (!item.journalId) return false;
@@ -1086,7 +1278,7 @@ export class LegendKeeperSyncEngine {
       }
 
       onProgress?.({
-        phase: `Pushing "${entry.name}" (${i + 1}/${total})`,
+        phase: `Syncing "${entry.name}" (${i + 1}/${total})`,
         current: i + 1,
         total
       });
@@ -1115,6 +1307,7 @@ export class LegendKeeperSyncEngine {
         await page.unsetFlag(MODULE_ID, FLAGS.RESOURCE_ID);
         await page.unsetFlag(MODULE_ID, FLAGS.DOCUMENT_ID);
         await page.unsetFlag(MODULE_ID, FLAGS.VERSION);
+        await page.unsetFlag(MODULE_ID, FLAGS.PAGE_HASH);
       }
     } finally {
       this.isSyncingInternal = false;

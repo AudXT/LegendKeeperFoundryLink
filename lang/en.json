@@ -49,11 +49,11 @@
       },
       "ConflictPolicy": {
         "Name": "Sync Conflict Policy",
-        "Hint": "Action to take when both LegendKeeper and Foundry have been modified since the last sync.",
+        "Hint": "Action to take when both LegendKeeper and Foundry have modified the exact same page since the last sync.",
         "Choices": {
-          "preferLK": "Prefer LegendKeeper on Pull / Prefer Foundry on Push",
-          "skip": "Skip conflicting entries during bulk sync",
-          "ask": "Prompt before overwriting conflicting entries"
+          "ask": "Prompt with side-by-side preview to pick which version to keep or abandon sync (Recommended)",
+          "preferLK": "Always keep LegendKeeper version on conflict",
+          "skip": "Skip conflicting pages without overwriting either side"
         }
       },
       "IncludeSidebarProperties": {

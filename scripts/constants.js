@@ -21,6 +21,7 @@ export const FLAGS = {
   DOCUMENT_ID: "documentId",
   DOCUMENT_TYPE: "documentType",
   VERSION: "version",
+  PAGE_HASH: "pageHash",
   LK_UPDATED_AT: "lkUpdatedAt",
   LAST_SYNCED_AT: "lastSyncedAt",
   CONTENT_HASH: "contentHash",

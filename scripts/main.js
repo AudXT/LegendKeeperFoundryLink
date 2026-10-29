@@ -122,10 +122,11 @@ function registerSettings() {
     restricted: true,
     type: String,
     choices: {
+      ask: "LK_SYNC.Settings.ConflictPolicy.Choices.ask",
       preferLK: "LK_SYNC.Settings.ConflictPolicy.Choices.preferLK",
       skip: "LK_SYNC.Settings.ConflictPolicy.Choices.skip"
     },
-    default: "preferLK"
+    default: "ask"
   });
 
   game.settings.register(MODULE_ID, SETTINGS.INCLUDE_SIDEBAR_PROPERTIES, {
