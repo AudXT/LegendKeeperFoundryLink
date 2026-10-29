@@ -15,23 +15,23 @@
     "Settings": {
       "ApiKey": {
         "Name": "LegendKeeper API Key",
-        "Hint": "Project-scoped API key (starts with lk_...) generated in LegendKeeper under Project Settings → Developers → API Keys."
+        "Hint": "Project-scoped API key (starts with lk_...) generated in LegendKeeper under Project Settings → Developers → API Keys (Admin role recommended)."
       },
       "BaseUrl": {
         "Name": "API Base URL / CORS Proxy",
-        "Hint": "Default is https://www.legendkeeper.com. If browser CORS blocks direct requests, run 'node tools/lk-cors-proxy.mjs' and set this to http://localhost:8787."
+        "Hint": "URL of the CORS proxy forwarding browser requests to LegendKeeper's API. Defaults to a Cloudflare Worker proxy so it works from any network over HTTPS. You can also deploy your own Cloudflare Worker (tools/cloudflare-worker.js) or run the local proxy ('node tools/lk-cors-proxy.mjs' at http://localhost:8787)."
       },
       "ProjectId": {
         "Name": "Project ID (Optional)",
-        "Hint": "Leave blank to auto-detect from the API key, or specify a LegendKeeper Project ID explicitly."
+        "Hint": "Leave blank to auto-detect from your API key, or specify a LegendKeeper Project ID explicitly."
       },
       "RootFolderName": {
         "Name": "Root Journal Folder Name",
-        "Hint": "Foundry Journal folder where synced LegendKeeper resources will be placed. Leave empty to place top-level resources at the Journal root."
+        "Hint": "Root Foundry Journal folder for synced LegendKeeper resources and the auto-generated '📖 LegendKeeper Wiki Index' journal. Creates real Foundry subfolders up to Foundry's 4-level folder depth limit; deeper articles are placed in their 4th-level folder and prefixed with their remaining subfolder path (e.g., 'Subfolder / Article Name')."
       },
       "SecretHandling": {
         "Name": "LegendKeeper Secret Handling",
-        "Hint": "How LegendKeeper secret blocks and hidden elements should be imported into Foundry Journal pages.",
+        "Hint": "How LegendKeeper secret blocks should be imported into Foundry Journal pages. Stripped secret blocks are preserved in LegendKeeper when pushing back.",
         "Choices": {
           "secretBlock": "Convert to Foundry <section class=\"secret\"> blocks (GM-only revealable)",
           "strip": "Exclude / Strip secret blocks on pull (preserve in LK on push)",
@@ -40,7 +40,7 @@
       },
       "HiddenResourceHandling": {
         "Name": "Hidden Resource & Document Handling",
-        "Hint": "How resources or document tabs marked Hidden in LegendKeeper should be imported.",
+        "Hint": "How resources or document tabs marked Hidden in LegendKeeper should be imported into Foundry.",
         "Choices": {
           "gmOnly": "Import as GM-Only (Observer permission: None)",
           "skip": "Skip hidden resources and hidden document tabs",
@@ -49,7 +49,7 @@
       },
       "ConflictPolicy": {
         "Name": "Sync Conflict Policy",
-        "Hint": "Action to take when both LegendKeeper and Foundry have modified the exact same page since the last sync.",
+        "Hint": "Before any push or pull, the module checks whether both LegendKeeper and Foundry modified the exact same page since the last sync. Choose how same-page conflicts are resolved.",
         "Choices": {
           "ask": "Prompt with side-by-side preview to pick which version to keep or abandon sync (Recommended)",
           "preferLK": "Always keep LegendKeeper version on conflict",
@@ -58,15 +58,15 @@
       },
       "IncludeSidebarProperties": {
         "Name": "Render Sidebar Properties & Tags in Journal",
-        "Hint": "When enabled, a resource's LegendKeeper tags, aliases, banner, and sidebar properties are rendered at the top of its primary Journal page."
+        "Hint": "When enabled, a resource's LegendKeeper tags, aliases, banner image, and sidebar properties are rendered at the top of its primary Journal page (automatically stripped on push)."
       },
       "IncludeNavigationLinks": {
         "Name": "Render Hierarchy Breadcrumbs & Child Links",
-        "Hint": "When enabled, synced Journal entries include clickable @UUID links to their parent resource and child resources."
+        "Hint": "When enabled, synced Journal entries include clickable @UUID breadcrumb links to their parent path and child resources at the top of the primary page (automatically stripped on push)."
       },
       "AutoSyncOnSave": {
         "Name": "Auto-Push Linked Journals on Save",
-        "Hint": "Automatically push changes to LegendKeeper whenever a linked Journal Entry or Page is edited and saved in Foundry."
+        "Hint": "When enabled, editing and saving a linked Journal Entry or Page in Foundry automatically checks LegendKeeper for remote edits/conflicts and pushes your changes."
       },
       "UploadLocalImages": {
         "Name": "Upload Local Images to LegendKeeper on Push",

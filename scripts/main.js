@@ -1,6 +1,6 @@
-import { MODULE_ID, MODULE_VERSION, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "./constants.js?v=1.2.2";
-import { LegendKeeperSyncEngine } from "./sync/sync-engine.js?v=1.2.2";
-import { LegendKeeperSyncManagerApp } from "./ui/sync-manager-app.js?v=1.2.2";
+import { MODULE_ID, MODULE_VERSION, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "./constants.js?v=1.2.3";
+import { LegendKeeperSyncEngine } from "./sync/sync-engine.js?v=1.2.3";
+import { LegendKeeperSyncManagerApp } from "./ui/sync-manager-app.js?v=1.2.3";
 
 console.log(`LegendKeeper Sync | Loaded v${MODULE_VERSION}`);
 
@@ -34,7 +34,7 @@ function registerSettings() {
   game.settings.registerMenu(MODULE_ID, "syncManagerMenu", {
     name: "LK_SYNC.Title",
     label: "LK_SYNC.Buttons.OpenSyncManager",
-    hint: "Open the LegendKeeper two-way Journal Sync dashboard.",
+    hint: "Open the LegendKeeper two-way Journal Sync Manager to pull, push, and resolve conflicts between LegendKeeper and Foundry VTT.",
     icon: "fas fa-book-atlas",
     type: class SyncMenuLauncher extends FormApplication {
       render() {
@@ -256,6 +256,7 @@ Hooks.on("renderJournalDirectory", (_app, html) => {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "lk-directory-sync-btn";
+  btn.title = "Open the LegendKeeper two-way Journal Sync Manager";
   btn.innerHTML = `<i class="fas fa-book-atlas"></i> ${game.i18n.localize("LK_SYNC.Buttons.OpenSyncManager")}`;
   btn.addEventListener("click", (ev) => {
     ev.preventDefault();
@@ -274,7 +275,7 @@ Hooks.on("renderJournalDirectory", (_app, html) => {
 Hooks.on("getJournalSheetHeaderButtons", (sheet, buttons) => {
   if (!game.user?.isGM) return;
   const entry = sheet.document || sheet.object;
-  if (!entry) return;
+  if (!entry || entry.getFlag(MODULE_ID, FLAGS.IS_INDEX_JOURNAL)) return;
 
   buttons.unshift({
     label: "LK Push",
@@ -282,7 +283,7 @@ Hooks.on("getJournalSheetHeaderButtons", (sheet, buttons) => {
     icon: "fas fa-cloud-upload-alt",
     onclick: async () => {
       try {
-        ui.notifications?.info(`Pushing "${entry.name}" to LegendKeeper...`);
+        ui.notifications?.info(`Checking LegendKeeper & pushing "${entry.name}"...`);
         await syncEngine.pushJournal(entry);
         ui.notifications?.info(
           game.i18n.format("LK_SYNC.Notifications.SinglePushSuccess", { name: entry.name })
@@ -318,7 +319,7 @@ Hooks.on("getJournalSheetHeaderButtons", (sheet, buttons) => {
 Hooks.on("getHeaderControlsApplicationV2", (app, controls) => {
   if (!game.user?.isGM) return;
   const doc = app.document;
-  if (!doc || doc.documentName !== "JournalEntry") return;
+  if (!doc || doc.documentName !== "JournalEntry" || doc.getFlag(MODULE_ID, FLAGS.IS_INDEX_JOURNAL)) return;
 
   controls.push({
     icon: "fas fa-cloud-upload-alt",

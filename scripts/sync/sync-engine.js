@@ -1,17 +1,17 @@
-import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.2.2";
+import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.2.3";
 import {
   LegendKeeper,
   NotFoundError,
   VersionMismatchError
-} from "../sdk/client.js?v=1.2.2";
+} from "../sdk/client.js?v=1.2.3";
 import {
   blocksToHtml,
   renderResourceDecorationHtml,
   renderMapDocumentHtml,
   renderTimelineDocumentHtml
-} from "../converter/blocks-to-html.js?v=1.2.2";
-import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.2.2";
-import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.2.2";
+} from "../converter/blocks-to-html.js?v=1.2.3";
+import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.2.3";
+import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.2.3";
 
 /**
  * Computes a deterministic string hash (FNV-1a 32-bit hex) for detecting local journal modifications
