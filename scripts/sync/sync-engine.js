@@ -1,9 +1,9 @@
-import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.2.7";
+import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.2.8";
 import {
   LegendKeeper,
   NotFoundError,
   VersionMismatchError
-} from "../sdk/client.js?v=1.2.7";
+} from "../sdk/client.js?v=1.2.8";
 import {
   blocksToHtml,
   escapeHtml,
@@ -11,9 +11,9 @@ import {
   renderResourceDecorationHtml,
   renderMapDocumentHtml,
   renderTimelineDocumentHtml
-} from "../converter/blocks-to-html.js?v=1.2.7";
-import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.2.7";
-import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.2.7";
+} from "../converter/blocks-to-html.js?v=1.2.8";
+import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.2.8";
+import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.2.8";
 
 /**
  * Computes a deterministic string hash (FNV-1a 32-bit hex) for detecting local journal modifications
@@ -68,6 +68,24 @@ export function computeJournalHash(journalEntry) {
   });
   const folderResourceId = journalEntry.folder?.getFlag?.(MODULE_ID, FLAGS.RESOURCE_ID) || "";
   return computeContentHash(`${journalEntry.name}|${folderResourceId}|${pageSignatures.join("||")}`);
+}
+
+const CURRENT_HASH_VERSION = 2;
+
+export function hasPageChangedLocally(page) {
+  if (!page) return false;
+  const sh = page.getFlag(MODULE_ID, FLAGS.PAGE_HASH);
+  if (!sh) return false;
+  if (page.getFlag(MODULE_ID, FLAGS.HASH_VERSION) !== CURRENT_HASH_VERSION) return false;
+  return computePageHash(page) !== sh;
+}
+
+export function hasJournalChangedLocally(entry) {
+  if (!entry) return false;
+  const sh = entry.getFlag(MODULE_ID, FLAGS.CONTENT_HASH);
+  if (!sh) return false;
+  if (entry.getFlag(MODULE_ID, FLAGS.HASH_VERSION) !== CURRENT_HASH_VERSION) return false;
+  return computeJournalHash(entry) !== sh;
 }
 
 export class LegendKeeperSyncEngine {
@@ -484,11 +502,9 @@ export class LegendKeeperSyncEngine {
 
       if (localEntry) {
         const storedLkUpdatedAt = localEntry.getFlag(MODULE_ID, FLAGS.LK_UPDATED_AT);
-        const storedHash = localEntry.getFlag(MODULE_ID, FLAGS.CONTENT_HASH);
-        const currentHash = computeJournalHash(localEntry);
 
         const remoteChanged = Boolean(res.updatedAt && storedLkUpdatedAt && res.updatedAt !== storedLkUpdatedAt);
-        const localChanged = Boolean(storedHash && currentHash !== storedHash);
+        const localChanged = hasJournalChangedLocally(localEntry);
 
         let status = "in-sync";
         if (remoteChanged && localChanged) status = "conflict";
@@ -516,10 +532,7 @@ export class LegendKeeperSyncEngine {
         const primaryPage = masterPages[0];
         const storedLkUpdatedAt = primaryPage.getFlag(MODULE_ID, FLAGS.LK_UPDATED_AT);
         const remoteChanged = Boolean(res.updatedAt && storedLkUpdatedAt && res.updatedAt !== storedLkUpdatedAt);
-        const localChanged = masterPages.some((p) => {
-          const sh = p.getFlag(MODULE_ID, FLAGS.PAGE_HASH);
-          return Boolean(sh && computePageHash(p) !== sh);
-        });
+        const localChanged = masterPages.some((p) => hasPageChangedLocally(p));
 
         let status = "in-sync";
         if (remoteChanged && localChanged) status = "conflict";
@@ -1120,11 +1133,10 @@ export class LegendKeeperSyncEngine {
         const targetFolder = folderHelper.getTargetFolderForResource(listItem);
 
         if (!wasJustCreated) {
-          const storedHash = entry.getFlag(MODULE_ID, FLAGS.CONTENT_HASH);
-          const currentHash = computeJournalHash(entry);
           const storedLkUpdatedAt = entry.getFlag(MODULE_ID, FLAGS.LK_UPDATED_AT);
           const remoteChanged = Boolean(listItem.updatedAt && listItem.updatedAt !== storedLkUpdatedAt);
-          const localChanged = Boolean(storedHash && currentHash !== storedHash);
+          const localChanged = hasJournalChangedLocally(entry);
+          const needsHashUpgrade = entry.getFlag(MODULE_ID, FLAGS.HASH_VERSION) !== CURRENT_HASH_VERSION;
 
           if (!remoteChanged && !localChanged && entry.pages?.size > 0) {
             const expectedOwnership = this.#computeJournalOwnership(listItem.isHidden);
@@ -1132,7 +1144,8 @@ export class LegendKeeperSyncEngine {
             if (
               entry.name !== expectedPathName ||
               (entry.folder?.id || null) !== (targetFolder?.id || null) ||
-              ownershipChanged
+              ownershipChanged ||
+              needsHashUpgrade
             ) {
               await entry.update({
                 name: expectedPathName,
@@ -1142,7 +1155,8 @@ export class LegendKeeperSyncEngine {
                   [MODULE_ID]: {
                     [FLAGS.RESOURCE_NAME]: listItem.name,
                     [FLAGS.PATH_NAME]: expectedPathName,
-                    [FLAGS.IS_HIDDEN]: Boolean(listItem.isHidden)
+                    [FLAGS.IS_HIDDEN]: Boolean(listItem.isHidden),
+                    [FLAGS.HASH_VERSION]: CURRENT_HASH_VERSION
                   }
                 }
               });
@@ -1154,7 +1168,7 @@ export class LegendKeeperSyncEngine {
             continue;
           }
 
-          if (localChanged && !remoteChanged && entry.pages?.size > 0) {
+          if (localChanged && !remoteChanged && entry.pages?.size > 0 && conflictPolicy !== "preferLK") {
             skipped++;
             continue;
           }
@@ -1331,10 +1345,7 @@ export class LegendKeeperSyncEngine {
       if (!wasJustCreated && primaryPage) {
         const storedLkUpdatedAt = primaryPage.getFlag(MODULE_ID, FLAGS.LK_UPDATED_AT);
         const remoteChanged = Boolean(listItem.updatedAt && listItem.updatedAt !== storedLkUpdatedAt);
-        const localChanged = existingResPages.some((p) => {
-          const sh = p.getFlag(MODULE_ID, FLAGS.PAGE_HASH);
-          return Boolean(sh && computePageHash(p) !== sh);
-        });
+        const localChanged = existingResPages.some((p) => hasPageChangedLocally(p));
         const needsTabMerge =
           existingResPages.length > 1 || primaryPage.name !== (listItem.name || "Untitled");
 
@@ -1384,9 +1395,14 @@ export class LegendKeeperSyncEngine {
             }
 
             const contentUpgraded = newContent !== oldContent;
+            const currentActualHash = computePageHash(p);
+            const storedHash = p.getFlag(MODULE_ID, FLAGS.PAGE_HASH);
+            const storedHashVersion = p.getFlag(MODULE_ID, FLAGS.HASH_VERSION);
+            const needsHashRepair =
+              storedHashVersion !== CURRENT_HASH_VERSION || currentActualHash !== storedHash;
             const newPageHash = contentUpgraded
               ? computeContentHash(`${p.name}|${stripGeneratedHtml(newContent)}`)
-              : p.getFlag(MODULE_ID, FLAGS.PAGE_HASH);
+              : currentActualHash;
 
             const storedDepth = p.getFlag(MODULE_ID, FLAGS.TREE_DEPTH);
             const storedHasChildren = p.getFlag(MODULE_ID, FLAGS.HAS_CHILDREN);
@@ -1397,7 +1413,8 @@ export class LegendKeeperSyncEngine {
               (p.ownership?.default ?? inheritLevel) !== desiredOwnership.default ||
               storedDepth !== desiredTreeDepth ||
               storedHasChildren !== desiredHasChildren ||
-              contentUpgraded
+              contentUpgraded ||
+              needsHashRepair
             ) {
               fastPathUpdates.push({
                 _id: p.id,
@@ -1410,7 +1427,8 @@ export class LegendKeeperSyncEngine {
                     [FLAGS.TREE_DEPTH]: desiredTreeDepth,
                     [FLAGS.HAS_CHILDREN]: desiredHasChildren,
                     [FLAGS.IS_HIDDEN]: isDocHidden,
-                    ...(contentUpgraded ? { [FLAGS.PAGE_HASH]: newPageHash } : {})
+                    [FLAGS.PAGE_HASH]: newPageHash,
+                    [FLAGS.HASH_VERSION]: CURRENT_HASH_VERSION
                   }
                 }
               });
@@ -1422,7 +1440,7 @@ export class LegendKeeperSyncEngine {
           continue;
         }
 
-        if (localChanged && !remoteChanged) {
+        if (localChanged && !remoteChanged && conflictPolicy !== "preferLK") {
           skipped++;
           continue;
         }
@@ -1451,6 +1469,26 @@ export class LegendKeeperSyncEngine {
 
     if (fastPathUpdates.length > 0) {
       await masterJournal.updateEmbeddedDocuments("JournalEntryPage", fastPathUpdates);
+      const postSaveHashFixes = [];
+      for (const upd of fastPathUpdates) {
+        const savedPage = masterJournal.pages?.get?.(upd._id);
+        if (!savedPage) continue;
+        const actualHash = computePageHash(savedPage);
+        if (actualHash !== savedPage.getFlag(MODULE_ID, FLAGS.PAGE_HASH)) {
+          postSaveHashFixes.push({
+            _id: savedPage.id,
+            flags: {
+              [MODULE_ID]: {
+                [FLAGS.PAGE_HASH]: actualHash,
+                [FLAGS.HASH_VERSION]: CURRENT_HASH_VERSION
+              }
+            }
+          });
+        }
+      }
+      if (postSaveHashFixes.length > 0) {
+        await masterJournal.updateEmbeddedDocuments("JournalEntryPage", postSaveHashFixes);
+      }
     }
 
     onProgress?.({ phase: "Building LegendKeeper Wiki Directory Page...", current: total, total });
@@ -1547,9 +1585,7 @@ export class LegendKeeperSyncEngine {
     );
 
     if (primaryPage && primaryPage.getFlag(MODULE_ID, FLAGS.LAST_SYNCED_AT) && extraLegacyPages.length === 0) {
-      const storedPageHash = primaryPage.getFlag(MODULE_ID, FLAGS.PAGE_HASH);
-      const currentPageHash = computePageHash(primaryPage);
-      const localChanged = Boolean(storedPageHash && currentPageHash !== storedPageHash);
+      const localChanged = hasPageChangedLocally(primaryPage);
 
       if (localChanged && conflictPolicy === "skip") {
         return { abandoned: true };
@@ -1652,6 +1688,7 @@ export class LegendKeeperSyncEngine {
       [FLAGS.HAS_CHILDREN]: pageHasChildren,
       [FLAGS.VERSION]: firstMeta?.version || null,
       [FLAGS.PAGE_HASH]: newPageHash,
+      [FLAGS.HASH_VERSION]: CURRENT_HASH_VERSION,
       [FLAGS.LK_UPDATED_AT]: resource.updatedAt || new Date().toISOString(),
       [FLAGS.LAST_SYNCED_AT]: Date.now(),
       [FLAGS.IS_HIDDEN]: effectiveResourceHidden,
@@ -1674,6 +1711,7 @@ export class LegendKeeperSyncEngine {
           flags: { [MODULE_ID]: pageFlags }
         }
       ]);
+      targetPage = masterJournal.pages?.get?.(primaryPage.id) || primaryPage;
     } else {
       const createdPages = await masterJournal.createEmbeddedDocuments("JournalEntryPage", [
         {
@@ -1687,6 +1725,24 @@ export class LegendKeeperSyncEngine {
         }
       ]);
       targetPage = createdPages[0] || null;
+    }
+
+    // Recompute hash from the actual server-saved page content (in case Foundry's server sanitizer normalized HTML)
+    if (targetPage) {
+      const postSaveHash = computePageHash(targetPage);
+      if (postSaveHash !== newPageHash) {
+        await masterJournal.updateEmbeddedDocuments("JournalEntryPage", [
+          {
+            _id: targetPage.id,
+            flags: {
+              [MODULE_ID]: {
+                [FLAGS.PAGE_HASH]: postSaveHash,
+                [FLAGS.HASH_VERSION]: CURRENT_HASH_VERSION
+              }
+            }
+          }
+        ]);
+      }
     }
 
     if (extraLegacyPages.length > 0) {
@@ -1881,13 +1937,10 @@ export class LegendKeeperSyncEngine {
         // Check for page-level conflict before overwriting an existing Foundry page!
         if (existingPage) {
           const storedVersion = existingPage.getFlag(MODULE_ID, FLAGS.VERSION);
-          const storedPageHash = existingPage.getFlag(MODULE_ID, FLAGS.PAGE_HASH);
-          const currentPageHash = computePageHash(existingPage);
-
-          const localChanged = Boolean(storedPageHash && currentPageHash !== storedPageHash);
+          const localChanged = hasPageChangedLocally(existingPage);
           const remoteChanged = !storedVersion || storedVersion !== blockVersion;
 
-          if (localChanged && !remoteChanged) {
+          if (localChanged && !remoteChanged && conflictPolicy !== "preferLK") {
             continue;
           }
 
@@ -2014,6 +2067,29 @@ export class LegendKeeperSyncEngine {
       await entry.updateEmbeddedDocuments("JournalEntryPage", pagesToUpdate);
     }
 
+    // Ensure all page hashes match post-save server-sanitized HTML
+    const pageHashFixes = [];
+    for (const p of entry.pages ?? []) {
+      const actualPageHash = computePageHash(p);
+      if (
+        actualPageHash !== p.getFlag(MODULE_ID, FLAGS.PAGE_HASH) ||
+        p.getFlag(MODULE_ID, FLAGS.HASH_VERSION) !== CURRENT_HASH_VERSION
+      ) {
+        pageHashFixes.push({
+          _id: p.id,
+          flags: {
+            [MODULE_ID]: {
+              [FLAGS.PAGE_HASH]: actualPageHash,
+              [FLAGS.HASH_VERSION]: CURRENT_HASH_VERSION
+            }
+          }
+        });
+      }
+    }
+    if (pageHashFixes.length > 0) {
+      await entry.updateEmbeddedDocuments("JournalEntryPage", pageHashFixes);
+    }
+
     const listRes = remoteResources?.find((r) => r.id === resource.id);
     const effectiveResourceHidden = Boolean(resource.isHidden || listRes?.isHidden);
     const entryOwnership = this.#computeJournalOwnership(effectiveResourceHidden);
@@ -2033,6 +2109,7 @@ export class LegendKeeperSyncEngine {
           [FLAGS.LK_UPDATED_AT]: resource.updatedAt || new Date().toISOString(),
           [FLAGS.LAST_SYNCED_AT]: Date.now(),
           [FLAGS.CONTENT_HASH]: updatedHash,
+          [FLAGS.HASH_VERSION]: CURRENT_HASH_VERSION,
           [FLAGS.TAGS]: resource.tags || [],
           [FLAGS.ALIASES]: resource.aliases || [],
           [FLAGS.ICON_GLYPH]: resource.iconGlyph || null,
@@ -2363,10 +2440,7 @@ export class LegendKeeperSyncEngine {
       resourceIdsToPush.push(targetResourceId);
     } else {
       for (const [resId, pages] of localIndex.pagesByResourceId.entries()) {
-        const hasLocalEdit = pages.some((p) => {
-          const sh = p.getFlag(MODULE_ID, FLAGS.PAGE_HASH);
-          return !sh || computePageHash(p) !== sh;
-        });
+        const hasLocalEdit = pages.some((p) => hasPageChangedLocally(p));
         if (hasLocalEdit) resourceIdsToPush.push(resId);
       }
     }
@@ -2454,7 +2528,8 @@ export class LegendKeeperSyncEngine {
                 [MODULE_ID]: {
                   [FLAGS.TAB_DOCS_META]: updatedTabMeta,
                   [FLAGS.VERSION]: updatedTabMeta[0]?.version || page.getFlag(MODULE_ID, FLAGS.VERSION),
-                  [FLAGS.PAGE_HASH]: computePageHash(page)
+                  [FLAGS.PAGE_HASH]: computePageHash(page),
+                  [FLAGS.HASH_VERSION]: CURRENT_HASH_VERSION
                 }
               }
             });
@@ -2518,7 +2593,8 @@ export class LegendKeeperSyncEngine {
           flags: {
             [MODULE_ID]: {
               [FLAGS.VERSION]: written.version,
-              [FLAGS.PAGE_HASH]: computePageHash(page)
+              [FLAGS.PAGE_HASH]: computePageHash(page),
+              [FLAGS.HASH_VERSION]: CURRENT_HASH_VERSION
             }
           }
         });
