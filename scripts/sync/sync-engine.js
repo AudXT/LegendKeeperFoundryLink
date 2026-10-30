@@ -1,17 +1,17 @@
-import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.2.3";
+import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.2.4";
 import {
   LegendKeeper,
   NotFoundError,
   VersionMismatchError
-} from "../sdk/client.js?v=1.2.3";
+} from "../sdk/client.js?v=1.2.4";
 import {
   blocksToHtml,
   renderResourceDecorationHtml,
   renderMapDocumentHtml,
   renderTimelineDocumentHtml
-} from "../converter/blocks-to-html.js?v=1.2.3";
-import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.2.3";
-import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.2.3";
+} from "../converter/blocks-to-html.js?v=1.2.4";
+import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.2.4";
+import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.2.4";
 
 /**
  * Computes a deterministic string hash (FNV-1a 32-bit hex) for detecting local journal modifications
@@ -150,6 +150,24 @@ export class LegendKeeperSyncEngine {
       }
       return false;
     };
+
+    const isHiddenInHierarchy = (item) => {
+      let cur = item;
+      const visited = new Set();
+      while (cur) {
+        if (cur.isHidden) return true;
+        if (!cur.parentId || cur.parentId === "templates" || visited.has(cur.id)) break;
+        visited.add(cur.id);
+        cur = byId.get(cur.parentId);
+      }
+      return false;
+    };
+
+    for (const item of allItems) {
+      if (isHiddenInHierarchy(item)) {
+        item.isHidden = true;
+      }
+    }
 
     const hiddenHandling = this.getSetting(SETTINGS.HIDDEN_RESOURCE_HANDLING, "gmOnly");
     return allItems.filter((item) => {
@@ -481,11 +499,11 @@ export class LegendKeeperSyncEngine {
   }
 
   /**
-   * Ensures Foundry JournalEntry Folders exist up to Foundry's maximum folder depth (4 levels total),
-   * and uses path-prefixed Journal names for any deeper levels inside the 4th-level folder.
+   * Ensures a single top-level Foundry JournalEntry Folder ("LegendKeeper") exists to hold the
+   * pinned "📖 LegendKeeper Wiki Index" and all synced JournalEntries with clean page titles.
+   * Any legacy nested subfolders from older versions are automatically cleaned up.
    */
   async ensureFolderHierarchy(remoteResources = []) {
-    const maxDepth = Math.min(globalThis.CONST?.FOLDER_MAX_DEPTH ?? 4, 4);
     const configuredRootName = (this.getSetting(SETTINGS.ROOT_FOLDER_NAME, "LegendKeeper") || "").trim();
     const journalFolders = () => (game.folders ?? []).filter((f) => f.type === "JournalEntry");
     const isTopLevelFolder = (f) => !f.folder && !f._source?.folder;
@@ -515,38 +533,15 @@ export class LegendKeeperSyncEngine {
       }
     }
 
-    const rootDepth = rootFolder ? 1 : 0;
-    const maxLkFolderDepth = Math.max(0, maxDepth - rootDepth);
     const pathInfo = this.buildResourcePathInfo(remoteResources);
 
-    const parentResourceIds = new Set();
-    for (const res of remoteResources) {
-      if (res.parentId && res.parentId !== "templates") {
-        parentResourceIds.add(res.parentId);
-      }
-    }
-
-    // Only resources that have children AND whose chain length is within maxLkFolderDepth get Foundry Folders
-    const allowedFolderResources = remoteResources
-      .filter((r) => {
-        if (!parentResourceIds.has(r.id)) return false;
-        const chainLen = pathInfo.chainById.get(r.id)?.length || 1;
-        return chainLen <= maxLkFolderDepth;
-      })
-      .sort((a, b) => {
-        const lenA = pathInfo.chainById.get(a.id)?.length || 1;
-        const lenB = pathInfo.chainById.get(b.id)?.length || 1;
-        if (lenA !== lenB) return lenA - lenB;
-        return (a.rank ?? "") < (b.rank ?? "") ? -1 : 1;
-      });
-
-    const allowedFolderResourceIds = new Set(allowedFolderResources.map((r) => r.id));
-
-    // Clean up any legacy folders that are no longer allowed (e.g. > maxLkFolderDepth or old overflow folders)
+    // Clean up any legacy nested folders or overflow root folders so only the single rootFolder remains
     const legacyFolders = journalFolders().filter((f) => {
       if (rootFolder && f.id === rootFolder.id) return false;
       const rId = f.getFlag(MODULE_ID, FLAGS.RESOURCE_ID);
-      if (rId && !allowedFolderResourceIds.has(rId)) return true;
+      if (rId) return true;
+      const parentId = (typeof f.folder === "string" ? f.folder : f.folder?.id) ?? f._source?.folder ?? null;
+      if (rootFolder && parentId === rootFolder.id) return true;
       const isOverflowRoot =
         Boolean(f.getFlag(MODULE_ID, FLAGS.IS_ROOT_FOLDER)) &&
         (f.getFlag(MODULE_ID, FLAGS.OVERFLOW_TIER) ?? 1) > 1;
@@ -576,89 +571,12 @@ export class LegendKeeperSyncEngine {
       }
     }
 
-    const existingFolderByResourceId = new Map();
-    for (const f of journalFolders()) {
-      const rId = f.getFlag(MODULE_ID, FLAGS.RESOURCE_ID);
-      if (rId) existingFolderByResourceId.set(rId, f);
-    }
-
-    const folderByResourceId = new Map();
-
-    // Create/update allowed folders strictly from shallowest (chainLen = 1) to deepest (chainLen = maxLkFolderDepth)
-    for (const res of allowedFolderResources) {
-      const parentFolder =
-        res.parentId && folderByResourceId.has(res.parentId)
-          ? folderByResourceId.get(res.parentId)
-          : rootFolder;
-      const desiredParentId = parentFolder?.id || null;
-      const desiredName = res.name.slice(0, 100);
-
-      let folder = existingFolderByResourceId.get(res.id) || null;
-      try {
-        if (!folder) {
-          const folderData = {
-            name: desiredName,
-            type: "JournalEntry",
-            folder: desiredParentId,
-            sorting: "a",
-            flags: {
-              [MODULE_ID]: {
-                [FLAGS.RESOURCE_ID]: res.id,
-                [FLAGS.PARENT_ID]: res.parentId || null
-              }
-            }
-          };
-          if (res.iconColor && /^#[0-9A-Fa-f]{6}$/.test(res.iconColor)) {
-            folderData.color = res.iconColor;
-          }
-          folder = await Folder.create(folderData);
-        } else {
-          const currentParentId =
-            (typeof folder.folder === "string" ? folder.folder : folder.folder?.id) ??
-            folder._source?.folder ??
-            null;
-          if (folder.name !== desiredName || currentParentId !== desiredParentId) {
-            await folder.update({
-              name: desiredName,
-              folder: desiredParentId
-            });
-          }
-        }
-      } catch (err) {
-        console.warn(`LegendKeeper Sync | Falling back to parent folder for "${res.name}":`, err?.message || err);
-        folder = parentFolder;
-      }
-
-      if (folder) {
-        folderByResourceId.set(res.id, folder);
-      }
-    }
-
     return {
       rootFolder,
-      folderByResourceId,
+      folderByResourceId: new Map(),
       pathInfo,
-      getTargetFolderForResource: (res) => {
-        if (!res) return rootFolder;
-        const chain = pathInfo.chainById.get(res.id) || [res];
-        const strictAncestors = chain.slice(0, -1);
-        if (strictAncestors.length === 0 || maxLkFolderDepth === 0) {
-          return rootFolder;
-        }
-        const folderAncestor =
-          strictAncestors[Math.min(strictAncestors.length, maxLkFolderDepth) - 1];
-        return (folderAncestor && folderByResourceId.get(folderAncestor.id)) || rootFolder;
-      },
-      getJournalNameForResource: (res) => {
-        if (!res) return "Untitled";
-        const chain = pathInfo.chainById.get(res.id) || [res];
-        const strictAncestors = chain.slice(0, -1);
-        if (strictAncestors.length <= maxLkFolderDepth) {
-          return res.name || "Untitled";
-        }
-        const overflowAncestors = strictAncestors.slice(maxLkFolderDepth);
-        return [...overflowAncestors.map((a) => a.name), res.name].join(" / ");
-      }
+      getTargetFolderForResource: () => rootFolder,
+      getJournalNameForResource: (res) => res?.name || "Untitled"
     };
   }
 
@@ -671,6 +589,10 @@ export class LegendKeeperSyncEngine {
     const idx = localIndex || this.buildLocalIndex();
     const pathInfo = this.buildResourcePathInfo(remoteResources);
     const { remoteById, childrenByParentId } = pathInfo;
+    const hiddenHandling = this.getSetting(SETTINGS.HIDDEN_RESOURCE_HANDLING, "gmOnly");
+    const noneLevel = globalThis.CONST?.DOCUMENT_OWNERSHIP_LEVELS?.NONE ?? 0;
+    const observerLevel = globalThis.CONST?.DOCUMENT_OWNERSHIP_LEVELS?.OBSERVER ?? 2;
+    const inheritLevel = globalThis.CONST?.DOCUMENT_OWNERSHIP_LEVELS?.INHERIT ?? -1;
 
     const escapeHtml = (str) =>
       String(str ?? "")
@@ -702,41 +624,52 @@ export class LegendKeeperSyncEngine {
       return `${linkHtml}${tags}`;
     };
 
-    const renderSubtreeHtml = (resId, depth = 0, visited = new Set()) => {
+    const renderSubtreeHtml = (resId, depth = 0, visited = new Set(), ancestorWrappedSecret = false) => {
       if (visited.has(resId)) return "";
       visited.add(resId);
       const res = remoteById.get(resId);
       if (!res) return "";
 
+      const isGmHidden = Boolean(res.isHidden && hiddenHandling === "gmOnly");
+      const shouldWrapSecret = isGmHidden && !ancestorWrappedSecret;
+
       const childIds = childrenByParentId.get(resId) || [];
       const linkAndTags = renderNodeLink(res);
 
+      let nodeHtml = "";
       if (childIds.length === 0) {
-        return `<li class="lk-index-leaf" style="margin: 3px 0;"><i class="fas fa-file-alt" style="opacity: 0.65; margin-right: 4px;"></i> ${linkAndTags}</li>`;
+        nodeHtml = `<li class="lk-index-leaf" style="margin: 3px 0;"><i class="fas fa-file-alt" style="opacity: 0.65; margin-right: 4px;"></i> ${linkAndTags}</li>`;
+      } else {
+        const descCount = countDescendants(resId);
+        const childrenHtml = childIds
+          .map((cId) =>
+            renderSubtreeHtml(cId, depth + 1, new Set(visited), ancestorWrappedSecret || shouldWrapSecret)
+          )
+          .join("");
+
+        const openAttr = depth < 2 ? " open" : "";
+        nodeHtml = `<li class="lk-index-branch" style="margin: 5px 0; list-style: none;">
+          <details${openAttr}>
+            <summary style="cursor: pointer; font-weight: 600;">
+              <i class="fas fa-folder-open" style="color: #d9a441; margin-right: 4px;"></i> ${linkAndTags}
+              <small style="opacity: 0.65; font-weight: normal; margin-left: 4px;">(${descCount})</small>
+            </summary>
+            <ul class="lk-wiki-tree" style="margin: 4px 0 6px 18px; padding-left: 10px; border-left: 2px solid rgba(128,128,128,0.25);">
+              ${childrenHtml}
+            </ul>
+          </details>
+        </li>`;
       }
 
-      const descCount = countDescendants(resId);
-      const childrenHtml = childIds
-        .map((cId) => renderSubtreeHtml(cId, depth + 1, new Set(visited)))
-        .join("");
-
-      const openAttr = depth < 2 ? " open" : "";
-      return `<li class="lk-index-branch" style="margin: 5px 0; list-style: none;">
-        <details${openAttr}>
-          <summary style="cursor: pointer; font-weight: 600;">
-            <i class="fas fa-folder-open" style="color: #d9a441; margin-right: 4px;"></i> ${linkAndTags}
-            <small style="opacity: 0.65; font-weight: normal; margin-left: 4px;">(${descCount})</small>
-          </summary>
-          <ul class="lk-wiki-tree" style="margin: 4px 0 6px 18px; padding-left: 10px; border-left: 2px solid rgba(128,128,128,0.25);">
-            ${childrenHtml}
-          </ul>
-        </details>
-      </li>`;
+      if (shouldWrapSecret) {
+        return `<section class="secret">${nodeHtml}</section>`;
+      }
+      return nodeHtml;
     };
 
     const topLevelIds = childrenByParentId.get(null) || [];
     const fullTreeItemsHtml = topLevelIds
-      .map((id) => renderSubtreeHtml(id, 0, new Set()))
+      .map((id) => renderSubtreeHtml(id, 0, new Set(), false))
       .join("");
 
     const syncedTime = new Date().toLocaleString();
@@ -757,7 +690,8 @@ export class LegendKeeperSyncEngine {
       {
         name: "📖 Full Wiki Tree",
         sort: 10000,
-        html: overviewHtml
+        html: overviewHtml,
+        ownership: { default: inheritLevel }
       }
     ];
 
@@ -767,19 +701,21 @@ export class LegendKeeperSyncEngine {
       const topChildren = childrenByParentId.get(topId) || [];
       if (!topRes || topChildren.length === 0) continue;
 
+      const isTopHidden = Boolean(topRes.isHidden && hiddenHandling === "gmOnly");
       const branchHtml = `<div class="lk-wiki-index" data-lk-generated="true">
         <p style="margin: 0 0 10px 0;">
           <strong>Category Root:</strong> ${renderNodeLink(topRes)}
         </p>
         <ul class="lk-wiki-tree" style="margin: 0; padding-left: 8px; list-style: none;">
-          ${topChildren.map((cId) => renderSubtreeHtml(cId, 0, new Set())).join("")}
+          ${topChildren.map((cId) => renderSubtreeHtml(cId, 0, new Set(), isTopHidden)).join("")}
         </ul>
       </div>`;
 
       desiredPages.push({
         name: `📂 ${topRes.name}`.slice(0, 100),
         sort: sortCounter,
-        html: branchHtml
+        html: branchHtml,
+        ownership: { default: isTopHidden ? noneLevel : inheritLevel }
       });
       sortCounter += 10000;
     }
@@ -790,6 +726,7 @@ export class LegendKeeperSyncEngine {
         name: "📖 LegendKeeper Wiki Index",
         folder: rootFolder?.id || null,
         sort: 0,
+        ownership: { default: observerLevel },
         flags: {
           [MODULE_ID]: {
             [FLAGS.IS_INDEX_JOURNAL]: true
@@ -798,12 +735,14 @@ export class LegendKeeperSyncEngine {
       });
     } else if (
       indexEntry.name !== "📖 LegendKeeper Wiki Index" ||
-      (indexEntry.folder?.id || null) !== (rootFolder?.id || null)
+      (indexEntry.folder?.id || null) !== (rootFolder?.id || null) ||
+      (indexEntry.ownership?.default ?? 0) !== observerLevel
     ) {
       await indexEntry.update({
         name: "📖 LegendKeeper Wiki Index",
         folder: rootFolder?.id || null,
-        sort: 0
+        sort: 0,
+        ownership: { ...(indexEntry.ownership || {}), default: observerLevel }
       });
     }
 
@@ -820,6 +759,7 @@ export class LegendKeeperSyncEngine {
           name: dp.name,
           type: "text",
           sort: dp.sort,
+          ownership: dp.ownership,
           text: { content: dp.html, format: 1 }
         });
       } else {
@@ -827,6 +767,7 @@ export class LegendKeeperSyncEngine {
           name: dp.name,
           type: "text",
           sort: dp.sort,
+          ownership: dp.ownership,
           text: { content: dp.html, format: 1 }
         });
       }
@@ -928,14 +869,22 @@ export class LegendKeeperSyncEngine {
           const localChanged = Boolean(storedHash && currentHash !== storedHash);
 
           if (!remoteChanged && !localChanged && entry.pages?.size > 0) {
-            if (entry.name !== expectedPathName || (entry.folder?.id || null) !== (targetFolder?.id || null)) {
+            const expectedOwnership = this.#computeJournalOwnership(listItem.isHidden);
+            const ownershipChanged = (entry.ownership?.default ?? 0) !== expectedOwnership.default;
+            if (
+              entry.name !== expectedPathName ||
+              (entry.folder?.id || null) !== (targetFolder?.id || null) ||
+              ownershipChanged
+            ) {
               await entry.update({
                 name: expectedPathName,
                 folder: targetFolder?.id || null,
+                ownership: { ...(entry.ownership || {}), ...expectedOwnership },
                 flags: {
                   [MODULE_ID]: {
                     [FLAGS.RESOURCE_NAME]: listItem.name,
-                    [FLAGS.PATH_NAME]: expectedPathName
+                    [FLAGS.PATH_NAME]: expectedPathName,
+                    [FLAGS.IS_HIDDEN]: Boolean(listItem.isHidden)
                   }
                 }
               });
@@ -1038,11 +987,22 @@ export class LegendKeeperSyncEngine {
 
   #computeJournalOwnership(isHidden) {
     const hiddenHandling = this.getSetting(SETTINGS.HIDDEN_RESOURCE_HANDLING, "gmOnly");
+    const noneLevel = globalThis.CONST?.DOCUMENT_OWNERSHIP_LEVELS?.NONE ?? 0;
+    const observerLevel = globalThis.CONST?.DOCUMENT_OWNERSHIP_LEVELS?.OBSERVER ?? 2;
     if (isHidden && hiddenHandling === "gmOnly") {
-      const noneLevel = globalThis.CONST?.DOCUMENT_OWNERSHIP_LEVELS?.NONE ?? 0;
       return { default: noneLevel };
     }
-    return null;
+    return { default: observerLevel };
+  }
+
+  #computePageOwnership(isHidden) {
+    const hiddenHandling = this.getSetting(SETTINGS.HIDDEN_RESOURCE_HANDLING, "gmOnly");
+    const noneLevel = globalThis.CONST?.DOCUMENT_OWNERSHIP_LEVELS?.NONE ?? 0;
+    const inheritLevel = globalThis.CONST?.DOCUMENT_OWNERSHIP_LEVELS?.INHERIT ?? -1;
+    if (isHidden && hiddenHandling === "gmOnly") {
+      return { default: noneLevel };
+    }
+    return { default: inheritLevel };
   }
 
   async #pullSingleResourceIntoEntry(
@@ -1204,7 +1164,7 @@ export class LegendKeeperSyncEngine {
         [FLAGS.PRESERVED_BLOCKS]: strippedBlocks
       };
 
-      const pageOwnership = this.#computeJournalOwnership(doc.isHidden);
+      const pageOwnership = this.#computePageOwnership(doc.isHidden);
 
       if (existingPage) {
         pagesToUpdate.push({
@@ -1213,7 +1173,7 @@ export class LegendKeeperSyncEngine {
           type: "text",
           sort: sortValue,
           text: { content: pageHtml, format: 1 },
-          ...(pageOwnership ? { ownership: pageOwnership } : {}),
+          ownership: { ...(existingPage.ownership || {}), ...pageOwnership },
           flags: { [MODULE_ID]: pageFlags }
         });
       } else {
@@ -1222,7 +1182,7 @@ export class LegendKeeperSyncEngine {
           type: "text",
           sort: sortValue,
           text: { content: pageHtml, format: 1 },
-          ...(pageOwnership ? { ownership: pageOwnership } : {}),
+          ownership: pageOwnership,
           flags: { [MODULE_ID]: pageFlags }
         });
       }
@@ -1240,14 +1200,16 @@ export class LegendKeeperSyncEngine {
       await entry.updateEmbeddedDocuments("JournalEntryPage", pagesToUpdate);
     }
 
-    const entryOwnership = this.#computeJournalOwnership(resource.isHidden);
+    const listRes = remoteResources?.find((r) => r.id === resource.id);
+    const effectiveResourceHidden = Boolean(resource.isHidden || listRes?.isHidden);
+    const entryOwnership = this.#computeJournalOwnership(effectiveResourceHidden);
     const displayPathName = folderHelper.getJournalNameForResource(resource);
     const updatedHash = computeJournalHash(entry);
 
     await entry.update({
       name: displayPathName,
       folder: targetFolder?.id || null,
-      ...(entryOwnership ? { ownership: entryOwnership } : {}),
+      ownership: { ...(entry.ownership || {}), ...entryOwnership },
       flags: {
         [MODULE_ID]: {
           [FLAGS.RESOURCE_ID]: resource.id,
@@ -1263,7 +1225,7 @@ export class LegendKeeperSyncEngine {
           [FLAGS.ICON_COLOR]: resource.iconColor || null,
           [FLAGS.ICON_SHAPE]: resource.iconShape || null,
           [FLAGS.ICON_SIZE]: resource.iconSize || null,
-          [FLAGS.IS_HIDDEN]: Boolean(resource.isHidden),
+          [FLAGS.IS_HIDDEN]: effectiveResourceHidden,
           [FLAGS.IS_LOCKED]: Boolean(resource.isLocked),
           [FLAGS.BANNER]: resource.banner || null,
           [FLAGS.PROPERTIES]: resource.properties || []
@@ -1319,13 +1281,6 @@ export class LegendKeeperSyncEngine {
 
       if (resourceId && journalEntry.name === storedPathName && storedResourceName) {
         desiredResourceName = storedResourceName;
-        if (!parentPathPrefix) {
-          if (!journalEntry.folder || isRootFolder) {
-            targetParentId = null;
-          } else if (folderResourceId && folderResourceId !== resourceId) {
-            targetParentId = folderResourceId;
-          }
-        }
       } else if (parentPathPrefix) {
         const currentFolderId = journalEntry.folder?.id || null;
         const matchingParentEntry = Array.from(localIndex.byResourceId.values()).find((e) => {
@@ -1338,12 +1293,8 @@ export class LegendKeeperSyncEngine {
         } else if (folderResourceId && folderResourceId !== resourceId) {
           targetParentId = folderResourceId;
         }
-      } else {
-        if (!journalEntry.folder || isRootFolder) {
-          targetParentId = null;
-        } else if (folderResourceId && folderResourceId !== resourceId) {
-          targetParentId = folderResourceId;
-        }
+      } else if (!resourceId && folderResourceId) {
+        targetParentId = folderResourceId;
       }
 
       const tags = journalEntry.getFlag(MODULE_ID, FLAGS.TAGS) || [];

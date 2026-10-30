@@ -29,12 +29,12 @@ A Foundry VTT (v12 / v13) module that provides **two-way synchronization** betwe
 - **Rich Block & HTML Conversion**:
   - Converts LegendKeeper headings, paragraphs, inline formatting (`bold`, `italic`, `underline`, `strike`, `code`, `sub`, `sup`, links), bullet/numbered lists, task checklists, tables, callouts (`info`, `note`, `success`, `warning`, `error`, `custom`), collapsible `expand` sections (`<details>`), multi-column layouts, key-value blocks, meters, infoboxes, and sidebar properties.
   - **Cross-Document Mentions**: Converts LegendKeeper `mention` runs and `resourceLink`/`resourceCollection` blocks into native clickable Foundry `@UUID[JournalEntry...]` links on pull, and converts Foundry `@UUID[JournalEntry...]` links back into native LegendKeeper `mention` runs on push.
-- **Secret & Hidden Resource Support**:
+- **Secret & Hidden Resource Support (Player vs. GM Permissions)**:
+  - Non-hidden LegendKeeper articles (and the **`📖 LegendKeeper Wiki Index`**) are automatically imported with **All Players: Observer** permission so your players can browse the wiki right away.
+  - Resources or folders marked **Hidden** in LegendKeeper (including any child articles inside a hidden folder) are imported as **GM-Only** (`All Players: None`) and wrapped in GM-only `<section class="secret">` blocks inside the Wiki Index tree, or skipped completely based on your settings.
   - Converts LegendKeeper `secret` blocks into Foundry `<section class="secret">` blocks (GM-only with a reveal/hide toggle) or strips them on pull (while preserving them in LegendKeeper when pushing back).
-  - Imports hidden LegendKeeper resources and document tabs as GM-only (`Observer: None`) or skips them based on your settings.
-- **Smart Folder Hierarchy + Wiki Index (4-Level Depth Workaround)**:
-  - Organizes your LegendKeeper hierarchy into real Foundry `Folder`s up to Foundry's 4-level maximum depth limit, and uses relative path prefixes in Journal names for deeper nesting (see [Foundry VTT Folder Depth Limitation & Workaround](#foundry-vtt-folder-depth-limitation--workaround) below).
-  - Automatically generates and maintains a **`📖 LegendKeeper Wiki Index`** Journal Entry at the top of the `LegendKeeper` folder with an indented, clickable `@UUID` directory tree of your entire wiki.
+- **Single Root Folder + Interactive `📖 LegendKeeper Wiki Index` (4-Level Depth Workaround)**:
+  - Avoids Foundry VTT's 4-folder nesting limit by placing all synced pages into a single top-level `LegendKeeper` folder alongside a pinned **`📖 LegendKeeper Wiki Index`** Journal Entry containing an expandable, clickable `@UUID` directory tree of your entire wiki (see [Foundry VTT Folder Depth Limitation & Workaround](#foundry-vtt-folder-depth-limitation--workaround) below).
 - **Interactive Sync Manager UI**:
   - Accessible from the **Journal Directory** sidebar (**LegendKeeper Sync** button) or **Module Settings**.
   - Displays live sync statuses (`In Sync`, `In LK Only`, `LK Newer`, `Foundry Only`, `Foundry Newer`, `Conflict`) with search, status filters, bulk Pull/Push actions, and per-entry Pull/Push/Open/Unlink controls.
@@ -112,32 +112,15 @@ LegendKeeper allows you to nest articles and folders to **unlimited depth**. How
 > *"JournalEntry Folders may only be nested 4 levels deep"*
 
 ### How This Module Works Around It
-To preserve your LegendKeeper organization cleanly without ever hitting Foundry's 4-folder crash, this module uses a **hybrid folder + relative-path naming strategy**:
+Rather than fighting Foundry's 4-folder sidebar limit, this module uses a **Single Top-Level Folder + Interactive Wiki Index** approach:
 
-1. **Real Foundry Folders Up to Depth 4**:
-   - **Depth 1**: `LegendKeeper` (root folder created by the module)
-   - **Depth 2**: Top-level LegendKeeper category / parent article
-   - **Depth 3**: Subfolder
-   - **Depth 4**: Sub-subfolder
-   - Any LegendKeeper resources that live within these first 4 folder levels are placed directly inside their matching Foundry folder and keep their clean title (`Article Name`).
-2. **Relative Path Prefix Below Depth 4**:
-   - Once a branch reaches the **4th folder level**, the module stops creating deeper Foundry folders.
-   - Any articles nested deeper than the 4th-level folder are placed inside that 4th-level ancestor folder, and their Foundry Journal name is prefixed with the **remaining relative subfolder path** below that 4th-level folder:
-     ```text
-     LegendKeeper/                      (Folder - Depth 1)
-     └── World Atlas/                   (Folder - Depth 2)
-         └── Sword Coast/               (Folder - Depth 3)
-             └── Waterdeep/             (Folder - Depth 4, Max Depth)
-                 ├── Waterdeep Overview (Journal at Depth 4)
-                 ├── Castle Ward / Piergeiron's Palace
-                 └── Dock Ward / The Yawning Portal / Undermountain Entrance
-     ```
-   - The module stores the true unprefixed LegendKeeper article name in module flags (`flags.legendkeeper-foundry-sync.resourceName`), so pushing a deeply nested Journal back to LegendKeeper will **not** overwrite its LegendKeeper title with the path prefix.
-
-   ![4-Level Folder Depth Workaround in Foundry Sidebar](docs/images/folder-hierarchy.png)
-
-3. **Auto-Generated `📖 LegendKeeper Wiki Index`**:
-   - On every pull, the module also creates/updates a master **`📖 LegendKeeper Wiki Index`** Journal Entry pinned at the top of the `LegendKeeper` root folder. This index displays your full LegendKeeper tree to arbitrary depth using indented, clickable `@UUID[JournalEntry...]` links.
+1. **Single Top-Level `LegendKeeper` Folder**:
+   - All synced LegendKeeper articles are placed inside a single top-level **`LegendKeeper`** folder in Foundry's Journal Directory with their clean article titles.
+   - Each article's primary page also includes clickable `@UUID[...]` breadcrumb links to its parent path and child articles at the top of the page.
+2. **Auto-Generated `📖 LegendKeeper Wiki Index` Journal**:
+   - On every pull, the module creates/updates a master **`📖 LegendKeeper Wiki Index`** Journal Entry pinned at the very top of the `LegendKeeper` folder (`All Players: Observer`).
+   - This index displays your full LegendKeeper hierarchy to **unlimited depth** using collapsible `<details>` folder trees, article counts, tag pills, and clickable `@UUID[JournalEntry...]` links (plus dedicated category tabs for each top-level folder).
+   - Any folders or articles marked **Hidden** in LegendKeeper are automatically wrapped in `<section class="secret">` inside the Wiki Index and given `All Players: None` permission on their Journal Entry, so players can freely browse the public wiki tree without ever seeing GM-hidden branches.
 
 ---
 

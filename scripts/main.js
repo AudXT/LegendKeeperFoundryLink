@@ -1,6 +1,6 @@
-import { MODULE_ID, MODULE_VERSION, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "./constants.js?v=1.2.3";
-import { LegendKeeperSyncEngine } from "./sync/sync-engine.js?v=1.2.3";
-import { LegendKeeperSyncManagerApp } from "./ui/sync-manager-app.js?v=1.2.3";
+import { MODULE_ID, MODULE_VERSION, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "./constants.js?v=1.2.4";
+import { LegendKeeperSyncEngine } from "./sync/sync-engine.js?v=1.2.4";
+import { LegendKeeperSyncManagerApp } from "./ui/sync-manager-app.js?v=1.2.4";
 
 console.log(`LegendKeeper Sync | Loaded v${MODULE_VERSION}`);
 

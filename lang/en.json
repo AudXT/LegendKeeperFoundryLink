@@ -27,7 +27,7 @@
       },
       "RootFolderName": {
         "Name": "Root Journal Folder Name",
-        "Hint": "Root Foundry Journal folder for synced LegendKeeper resources and the auto-generated '📖 LegendKeeper Wiki Index' journal. Creates real Foundry subfolders up to Foundry's 4-level folder depth limit; deeper articles are placed in their 4th-level folder and prefixed with their remaining subfolder path (e.g., 'Subfolder / Article Name')."
+        "Hint": "Top-level Foundry Journal folder that holds the auto-generated '📖 LegendKeeper Wiki Index' journal and all synced LegendKeeper pages. Leave empty to place them at the Journal root."
       },
       "SecretHandling": {
         "Name": "LegendKeeper Secret Handling",
@@ -40,11 +40,11 @@
       },
       "HiddenResourceHandling": {
         "Name": "Hidden Resource & Document Handling",
-        "Hint": "How resources or document tabs marked Hidden in LegendKeeper should be imported into Foundry.",
+        "Hint": "Visible LegendKeeper resources are imported with All Players: Observer permission so players can view the wiki. Choose how resources or document tabs marked Hidden in LegendKeeper are imported:",
         "Choices": {
-          "gmOnly": "Import as GM-Only (Observer permission: None)",
-          "skip": "Skip hidden resources and hidden document tabs",
-          "default": "Import with default Journal permissions"
+          "gmOnly": "Import Hidden items as GM-Only (All Players: None)",
+          "skip": "Skip hidden resources and hidden document tabs completely",
+          "default": "Import Hidden items as visible to players too (All Players: Observer)"
         }
       },
       "ConflictPolicy": {

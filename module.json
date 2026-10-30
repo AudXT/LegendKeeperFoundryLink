@@ -2,7 +2,7 @@
   "id": "legendkeeper-foundry-sync",
   "title": "LegendKeeper Journal Sync",
   "description": "Two-way synchronization between Foundry VTT Journal Entries and LegendKeeper projects using the official LegendKeeper v3 REST API.",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "compatibility": {
     "minimum": "12",
     "verified": "13"
@@ -13,7 +13,7 @@
     }
   ],
   "esmodules": [
-    "scripts/main-v123.js"
+    "scripts/main-v124.js"
   ],
   "styles": [
     "styles/legendkeeper-sync.css"
