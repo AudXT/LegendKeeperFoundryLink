@@ -42,7 +42,7 @@
         type="button"
         class="lk-btn"
         data-action="open-settings"
-        title="Open Foundry Module Settings to configure API Key, CORS Proxy, Folder Name, and Conflict Policy"
+        title="Open Foundry Module Settings to configure API Key, CORS Proxy, Organization Mode (Single Master Journal, Single Folder, or Nested Folders), and Conflict Policy"
       >
         <i class="fas fa-cog"></i> Settings
       </button>
@@ -123,7 +123,7 @@
         type="button"
         class="lk-btn lk-btn-primary"
         data-action="pull-all"
-        title="Download all LegendKeeper resources into the top-level LegendKeeper folder, set player Observer permissions on visible articles, and update the '📖 LegendKeeper Wiki Index' journal"
+        title="Download all LegendKeeper resources using your selected Organization Mode (Single Master Journal Entry by default), set player Observer permissions on visible articles, and build the interactive Wiki Directory tree"
         {{#if isBusy}}disabled{{/if}}
       >
         <i class="fas fa-cloud-download-alt"></i> Pull All from LK
@@ -187,9 +187,9 @@
     <table class="lk-sync-table">
       <thead>
         <tr>
-          <th title="LegendKeeper resource title (articles nested deeper than Foundry's 4-folder limit are prefixed with their remaining subfolder path in Foundry)">Resource / Journal</th>
+          <th title="LegendKeeper resource title (in Nested Folders mode, articles deeper than Foundry's 4-folder limit are prefixed with their remaining subfolder path)">Resource / Journal</th>
           <th title="Full LegendKeeper ancestor hierarchy path">Parent / Folder</th>
-          <th class="lk-col-center" title="Number of LegendKeeper document tabs / Foundry JournalEntry pages">Pages</th>
+          <th class="lk-col-center" title="Number of LegendKeeper document tabs on this resource (combined inline with horizontal dividers in Single Master Journal mode, or separate pages in multi-journal modes)">Tabs / Pages</th>
           <th class="lk-col-center" title="Current synchronization status between Foundry VTT and LegendKeeper">Status</th>
           <th class="lk-col-actions" title="Sync or open individual resources">Actions</th>
         </tr>

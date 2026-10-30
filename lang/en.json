@@ -33,9 +33,9 @@
         "Name": "Journal & Folder Organization Mode",
         "Hint": "Choose how LegendKeeper articles are organized in Foundry VTT. Switching modes and clicking 'Pull All from LK' automatically migrates and cleans up the previous layout.",
         "Choices": {
-          "singleFolder": "Single Top-Level Folder + Wiki Index (One Journal per Article)",
-          "nestedFolders": "Nested Folders (up to Foundry's 4-Level Limit) + Path Names Below + Wiki Index",
-          "singleJournal": "Single Master Journal Entry (Entire Wiki as Pages Inside One Journal)"
+          "singleJournal": "Single Master Journal Entry — Entire Wiki as Pages in One '📖 LegendKeeper Wiki' Journal (Recommended)",
+          "singleFolder": "Single Top-Level Folder + Wiki Index (One Journal Entry per Article)",
+          "nestedFolders": "Nested Folders (up to Foundry's 4-Level Limit) + Path Names Below + Wiki Index"
         }
       },
       "SecretHandling": {
@@ -49,9 +49,9 @@
       },
       "HiddenResourceHandling": {
         "Name": "Hidden Resource & Document Handling",
-        "Hint": "Visible LegendKeeper resources are imported with All Players: Observer permission so players can view the wiki. Choose how resources or document tabs marked Hidden in LegendKeeper are imported:",
+        "Hint": "Visible LegendKeeper resources are imported with All Players: Observer permission so players can view the wiki. Choose how resources, folders, or document tabs marked Hidden in LegendKeeper are imported:",
         "Choices": {
-          "gmOnly": "Import Hidden items as GM-Only (All Players: None)",
+          "gmOnly": "Import Hidden items (and children of hidden folders) as GM-Only (All Players: None)",
           "skip": "Skip hidden resources and hidden document tabs completely",
           "default": "Import Hidden items as visible to players too (All Players: Observer)"
         }
@@ -67,11 +67,11 @@
       },
       "IncludeSidebarProperties": {
         "Name": "Render Sidebar Properties & Tags in Journal",
-        "Hint": "When enabled, a resource's LegendKeeper tags, aliases, banner image, and sidebar properties are rendered at the top of its primary Journal page (automatically stripped on push)."
+        "Hint": "When enabled, a resource's LegendKeeper tags, aliases, banner image, and sidebar properties are rendered at the top of its Journal page (automatically ignored on push)."
       },
       "IncludeNavigationLinks": {
-        "Name": "Render Hierarchy Breadcrumbs & Child Links",
-        "Hint": "When enabled, synced Journal entries include clickable @UUID breadcrumb links to their parent path and child resources at the top of the primary page (automatically stripped on push)."
+        "Name": "Render Hierarchy Breadcrumbs & Sub-Resource Links",
+        "Hint": "When enabled, synced Journal pages include a clickable ancestor breadcrumb path ('Path: Folder › Subfolder') at the top and a 'Sub-Resources' list at the bottom (automatically ignored on push)."
       },
       "AutoSyncOnSave": {
         "Name": "Auto-Push Linked Journals on Save",

@@ -1,9 +1,9 @@
-import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.2.8";
+import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.2.9";
 import {
   LegendKeeper,
   NotFoundError,
   VersionMismatchError
-} from "../sdk/client.js?v=1.2.8";
+} from "../sdk/client.js?v=1.2.9";
 import {
   blocksToHtml,
   escapeHtml,
@@ -11,9 +11,9 @@ import {
   renderResourceDecorationHtml,
   renderMapDocumentHtml,
   renderTimelineDocumentHtml
-} from "../converter/blocks-to-html.js?v=1.2.8";
-import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.2.8";
-import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.2.8";
+} from "../converter/blocks-to-html.js?v=1.2.9";
+import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.2.9";
+import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.2.9";
 
 /**
  * Computes a deterministic string hash (FNV-1a 32-bit hex) for detecting local journal modifications
@@ -620,7 +620,7 @@ export class LegendKeeperSyncEngine {
    * - `singleJournal`: Single top-level "LegendKeeper" folder holding one master "📖 LegendKeeper Wiki" JournalEntry.
    */
   async ensureFolderHierarchy(remoteResources = []) {
-    const folderMode = this.getSetting(SETTINGS.FOLDER_MODE, "singleFolder");
+    const folderMode = this.getSetting(SETTINGS.FOLDER_MODE, "singleJournal");
     const maxDepth = Math.min(globalThis.CONST?.FOLDER_MAX_DEPTH ?? 4, 4);
     const configuredRootName = (this.getSetting(SETTINGS.ROOT_FOLDER_NAME, "LegendKeeper") || "").trim();
     const journalFolders = () => (game.folders ?? []).filter((f) => f.type === "JournalEntry");
@@ -1043,7 +1043,7 @@ export class LegendKeeperSyncEngine {
   async pullAll({ onProgress } = {}) {
     const lk = this.getClient();
     const conflictPolicy = this.getSetting(SETTINGS.CONFLICT_POLICY, "ask");
-    const folderMode = this.getSetting(SETTINGS.FOLDER_MODE, "singleFolder");
+    const folderMode = this.getSetting(SETTINGS.FOLDER_MODE, "singleJournal");
 
     this.isSyncingInternal = true;
     let created = 0;
@@ -1773,7 +1773,7 @@ export class LegendKeeperSyncEngine {
    */
   async pullResource(resourceId) {
     const lk = this.getClient();
-    const folderMode = this.getSetting(SETTINGS.FOLDER_MODE, "singleFolder");
+    const folderMode = this.getSetting(SETTINGS.FOLDER_MODE, "singleJournal");
     this.isSyncingInternal = true;
     try {
       const remoteResources = await this.fetchAllRemoteResources();

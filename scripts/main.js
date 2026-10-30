@@ -1,6 +1,6 @@
-import { MODULE_ID, MODULE_VERSION, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "./constants.js?v=1.2.8";
-import { LegendKeeperSyncEngine } from "./sync/sync-engine.js?v=1.2.8";
-import { LegendKeeperSyncManagerApp } from "./ui/sync-manager-app.js?v=1.2.8";
+import { MODULE_ID, MODULE_VERSION, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "./constants.js?v=1.2.9";
+import { LegendKeeperSyncEngine } from "./sync/sync-engine.js?v=1.2.9";
+import { LegendKeeperSyncManagerApp } from "./ui/sync-manager-app.js?v=1.2.9";
 
 console.log(`LegendKeeper Sync | Loaded v${MODULE_VERSION}`);
 
@@ -95,11 +95,11 @@ function registerSettings() {
     restricted: true,
     type: String,
     choices: {
+      singleJournal: "LK_SYNC.Settings.FolderMode.Choices.singleJournal",
       singleFolder: "LK_SYNC.Settings.FolderMode.Choices.singleFolder",
-      nestedFolders: "LK_SYNC.Settings.FolderMode.Choices.nestedFolders",
-      singleJournal: "LK_SYNC.Settings.FolderMode.Choices.singleJournal"
+      nestedFolders: "LK_SYNC.Settings.FolderMode.Choices.nestedFolders"
     },
-    default: "singleFolder"
+    default: "singleJournal"
   });
 
   game.settings.register(MODULE_ID, SETTINGS.SECRET_HANDLING, {
