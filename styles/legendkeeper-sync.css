@@ -697,4 +697,45 @@
   font-size: 0.85em;
 }
 
+/* ==========================================================================
+   Inline Document Tab Dividers (Single Master Journal Mode)
+   ========================================================================== */
+
+.lk-doc-tab-section {
+  clear: both;
+}
+
+.lk-tab-separator {
+  margin: 24px 0 12px 0;
+  clear: both;
+}
+
+.lk-tab-separator.lk-tab-first {
+  margin-top: 8px;
+}
+
+.lk-tab-hr {
+  border: none;
+  border-top: 2px solid rgba(196, 148, 84, 0.5);
+  margin: 0 0 12px 0;
+}
+
+.lk-tab-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 4px 10px;
+  font-size: 1.25em;
+  background: rgba(196, 148, 84, 0.12);
+  border-left: 4px solid #c49454;
+  border-radius: 4px;
+}
+
+.lk-tab-title i {
+  color: #c49454;
+  font-size: 0.85em;
+}
+
+
 

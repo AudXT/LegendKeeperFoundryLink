@@ -1,5 +1,5 @@
 export const MODULE_ID = "legendkeeper-foundry-sync";
-export const MODULE_VERSION = "1.2.6";
+export const MODULE_VERSION = "1.2.7";
 
 export const SETTINGS = {
   API_KEY: "apiKey",
@@ -25,6 +25,7 @@ export const FLAGS = {
   DOCUMENT_ID: "documentId",
   DOCUMENT_TYPE: "documentType",
   IS_PRIMARY_DOC: "isPrimaryDoc",
+  TAB_DOCS_META: "tabDocsMeta",
   TREE_DEPTH: "treeDepth",
   HAS_CHILDREN: "hasChildren",
   VERSION: "version",

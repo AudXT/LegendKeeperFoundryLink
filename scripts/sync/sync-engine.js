@@ -1,18 +1,19 @@
-import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.2.6";
+import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.2.7";
 import {
   LegendKeeper,
   NotFoundError,
   VersionMismatchError
-} from "../sdk/client.js?v=1.2.6";
+} from "../sdk/client.js?v=1.2.7";
 import {
   blocksToHtml,
+  escapeHtml,
   renderFoundryContentLink,
   renderResourceDecorationHtml,
   renderMapDocumentHtml,
   renderTimelineDocumentHtml
-} from "../converter/blocks-to-html.js?v=1.2.6";
-import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.2.6";
-import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.2.6";
+} from "../converter/blocks-to-html.js?v=1.2.7";
+import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.2.7";
+import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.2.7";
 
 /**
  * Computes a deterministic string hash (FNV-1a 32-bit hex) for detecting local journal modifications
@@ -207,6 +208,14 @@ export class LegendKeeperSyncEngine {
           if (docId) {
             byDocumentId.set(docId, { entry, page });
           }
+          const tabMeta = page.getFlag(MODULE_ID, FLAGS.TAB_DOCS_META);
+          if (Array.isArray(tabMeta)) {
+            for (const tm of tabMeta) {
+              if (tm?.documentId) {
+                byDocumentId.set(tm.documentId, { entry, page });
+              }
+            }
+          }
         }
         continue;
       }
@@ -217,6 +226,14 @@ export class LegendKeeperSyncEngine {
           const docId = page.getFlag(MODULE_ID, FLAGS.DOCUMENT_ID);
           if (docId) {
             byDocumentId.set(docId, { entry, page });
+          }
+          const tabMeta = page.getFlag(MODULE_ID, FLAGS.TAB_DOCS_META);
+          if (Array.isArray(tabMeta)) {
+            for (const tm of tabMeta) {
+              if (tm?.documentId) {
+                byDocumentId.set(tm.documentId, { entry, page });
+              }
+            }
           }
         }
       } else {
@@ -1318,8 +1335,10 @@ export class LegendKeeperSyncEngine {
           const sh = p.getFlag(MODULE_ID, FLAGS.PAGE_HASH);
           return Boolean(sh && computePageHash(p) !== sh);
         });
+        const needsTabMerge =
+          existingResPages.length > 1 || primaryPage.name !== (listItem.name || "Untitled");
 
-        if (!remoteChanged && !localChanged) {
+        if (!remoteChanged && !localChanged && !needsTabMerge) {
           let anyMetaChanged = false;
           for (let pIdx = 0; pIdx < existingResPages.length; pIdx++) {
             const p = existingResPages[pIdx];
@@ -1520,28 +1539,31 @@ export class LegendKeeperSyncEngine {
     });
 
     const existingResPages = localIndex.pagesByResourceId.get(resource.id) || [];
-    const existingPagesByDocId = new Map();
-    for (const p of existingResPages) {
-      const dId = p.getFlag(MODULE_ID, FLAGS.DOCUMENT_ID);
-      if (dId) existingPagesByDocId.set(dId, p);
+    const primaryPage = existingResPages[0] || null;
+    const extraLegacyPages = existingResPages.slice(1);
+    const storedTabsMeta = primaryPage?.getFlag(MODULE_ID, FLAGS.TAB_DOCS_META) || [];
+    const storedMetaByDocId = new Map(
+      Array.isArray(storedTabsMeta) ? storedTabsMeta.map((m) => [m.documentId, m]) : []
+    );
+
+    if (primaryPage && primaryPage.getFlag(MODULE_ID, FLAGS.LAST_SYNCED_AT) && extraLegacyPages.length === 0) {
+      const storedPageHash = primaryPage.getFlag(MODULE_ID, FLAGS.PAGE_HASH);
+      const currentPageHash = computePageHash(primaryPage);
+      const localChanged = Boolean(storedPageHash && currentPageHash !== storedPageHash);
+
+      if (localChanged && conflictPolicy === "skip") {
+        return { abandoned: true };
+      }
     }
 
-    const pagesToCreate = [];
-    const pagesToUpdate = [];
-    let abandonedAny = false;
+    const tabSectionsHtml = [];
+    const tabDocsMeta = [];
+    const isMultiTab = docs.length > 1;
 
     for (let idx = 0; idx < docs.length; idx++) {
       const doc = docs[idx];
-      const isPrimaryPage = idx === 0;
-      const sortValue = baseSort + idx * 10;
-      const headingLevel = Math.min(Math.max(depth + 1 + (isPrimaryPage ? 0 : 1), 1), 3);
-
-      let existingPage = existingPagesByDocId.get(doc.id);
-      if (!existingPage && isPrimaryPage && existingResPages.length > 0 && !existingResPages[0].getFlag(MODULE_ID, FLAGS.DOCUMENT_ID)) {
-        existingPage = existingResPages[0];
-      }
-
-      let pageHtml = "";
+      const cleanDocName = doc.name || "Main";
+      let docBodyHtml = "";
       let blockVersion = null;
       const strippedBlocks = [];
 
@@ -1551,76 +1573,15 @@ export class LegendKeeperSyncEngine {
           documentId: doc.id
         });
         blockVersion = docBlocks.version;
-
-        if (existingPage && existingPage.getFlag(MODULE_ID, FLAGS.LAST_SYNCED_AT)) {
-          const storedVersion = existingPage.getFlag(MODULE_ID, FLAGS.VERSION);
-          const storedPageHash = existingPage.getFlag(MODULE_ID, FLAGS.PAGE_HASH);
-          const currentPageHash = computePageHash(existingPage);
-
-          const localChanged = Boolean(storedPageHash && currentPageHash !== storedPageHash);
-          const remoteChanged = !storedVersion || storedVersion !== blockVersion;
-
-          if (localChanged && !remoteChanged) {
-            continue;
-          }
-
-          if (localChanged && remoteChanged) {
-            if (conflictPolicy === "skip") {
-              abandonedAny = true;
-              continue;
-            }
-            if (conflictPolicy === "ask") {
-              const decision = await promptPageConflictResolution({
-                resourceName: resource.name,
-                pageName: doc.name || existingPage.name || "Main",
-                remoteText: docBlocks.text || "",
-                localHtml: existingPage.text?.content || "",
-                operation: "pull"
-              });
-
-              if (decision === "cancel") {
-                abandonedAny = true;
-                ui.notifications?.warn(
-                  `Skipped syncing "${resource.name} → ${doc.name || existingPage.name}" due to conflict.`
-                );
-                continue;
-              }
-
-              if (decision === "keep-foundry") {
-                const preserved = existingPage.getFlag(MODULE_ID, FLAGS.PRESERVED_BLOCKS) || [];
-                const blocksToPush = await htmlToBlocks(existingPage.text?.content || "", {
-                  ...converterContext,
-                  preservedBlocks: preserved
-                });
-                const written = await lk.documents.replaceBlocks(
-                  { resourceId: resource.id, documentId: doc.id },
-                  { blocks: blocksToPush, ifMatch: blockVersion }
-                );
-                await existingPage.update({
-                  flags: {
-                    [MODULE_ID]: {
-                      [FLAGS.VERSION]: written.version,
-                      [FLAGS.PAGE_HASH]: computePageHash(existingPage)
-                    }
-                  }
-                });
-                continue;
-              }
-            }
-          }
-        }
-
-        const bodyHtml = blocksToHtml(docBlocks.blocks || [], {
+        docBodyHtml = blocksToHtml(docBlocks.blocks || [], {
           ...converterContext,
           currentResourceId: resource.id,
           strippedBlocks
         });
-        pageHtml = isPrimaryPage ? `${headerHtml}${bodyHtml}${footerHtml}` : bodyHtml;
       } else if (doc.type === "map") {
         const fullDoc = await lk.documents.get({ resourceId: resource.id, documentId: doc.id });
         const featuresPage = await lk.features.list({ resourceId: resource.id, documentId: doc.id });
-        const mapHtml = renderMapDocumentHtml(fullDoc, featuresPage.data || [], converterContext);
-        pageHtml = isPrimaryPage ? `${headerHtml}${mapHtml}${footerHtml}` : mapHtml;
+        docBodyHtml = renderMapDocumentHtml(fullDoc, featuresPage.data || [], converterContext);
       } else if (doc.type === "time") {
         const lanesPage = await lk.timelines.listLanes({ resourceId: resource.id, documentId: doc.id });
         const events = [];
@@ -1631,88 +1592,124 @@ export class LegendKeeperSyncEngine {
         })) {
           events.push(ev);
         }
-        const timelineHtml = renderTimelineDocumentHtml(doc, lanesPage.data || [], events, converterContext);
-        pageHtml = isPrimaryPage ? `${headerHtml}${timelineHtml}${footerHtml}` : timelineHtml;
+        docBodyHtml = renderTimelineDocumentHtml(doc, lanesPage.data || [], events, converterContext);
       } else {
-        const fallbackHtml = `<div class="lk-board-placeholder" data-lk-generated="true"><p><em>LegendKeeper ${doc.type} document ("${doc.name}").</em></p></div>`;
-        pageHtml = isPrimaryPage ? `${headerHtml}${fallbackHtml}${footerHtml}` : fallbackHtml;
+        docBodyHtml = `<div class="lk-board-placeholder" data-lk-generated="true"><p><em>LegendKeeper ${escapeHtml(doc.type)} document ("${escapeHtml(cleanDocName)}").</em></p></div>`;
       }
 
-      const cleanDocName = doc.name || "Main";
-      const pageName =
-        isPrimaryPage && (cleanDocName.toLowerCase() === "main" || cleanDocName === resource.name || docs.length === 1)
-          ? resource.name || "Untitled"
-          : `${resource.name} — ${cleanDocName}`;
-      const newPageHash = computeContentHash(`${pageName}|${stripGeneratedHtml(pageHtml)}`);
+      tabDocsMeta.push({
+        documentId: doc.id,
+        name: cleanDocName,
+        type: doc.type,
+        version: blockVersion,
+        isHidden: Boolean(doc.isHidden),
+        preservedBlocks: strippedBlocks
+      });
 
-      const isDocHidden = Boolean(effectiveResourceHidden || doc.isHidden);
-      const pageOwnership = this.#computePageOwnership(isDocHidden);
-      const pageTreeDepth = depth + (isPrimaryPage ? 0 : 1);
-      const pageHasChildren = Boolean(isPrimaryPage && Array.isArray(childResourceIds) && childResourceIds.length > 0);
-
-      const pageFlags = {
-        [FLAGS.RESOURCE_ID]: resource.id,
-        [FLAGS.RESOURCE_NAME]: resource.name,
-        [FLAGS.PARENT_ID]: resource.parentId || null,
-        [FLAGS.DOCUMENT_ID]: doc.id,
-        [FLAGS.DOCUMENT_TYPE]: doc.type,
-        [FLAGS.IS_PRIMARY_DOC]: isPrimaryPage,
-        [FLAGS.TREE_DEPTH]: pageTreeDepth,
-        [FLAGS.HAS_CHILDREN]: pageHasChildren,
-        [FLAGS.VERSION]: blockVersion,
-        [FLAGS.PAGE_HASH]: newPageHash,
-        [FLAGS.LK_UPDATED_AT]: resource.updatedAt || new Date().toISOString(),
-        [FLAGS.LAST_SYNCED_AT]: Date.now(),
-        [FLAGS.IS_HIDDEN]: isDocHidden,
-        [FLAGS.TAGS]: resource.tags || [],
-        [FLAGS.ALIASES]: resource.aliases || [],
-        [FLAGS.PRESERVED_BLOCKS]: strippedBlocks
-      };
-
-      if (existingPage) {
-        pagesToUpdate.push({
-          _id: existingPage.id,
-          name: pageName,
-          type: "text",
-          sort: sortValue,
-          title: { show: true, level: headingLevel },
-          text: { content: pageHtml, format: 1 },
-          ownership: { ...(existingPage.ownership || {}), ...pageOwnership },
-          flags: { [MODULE_ID]: pageFlags }
-        });
-        localIndex.byDocumentId.set(doc.id, { entry: masterJournal, page: existingPage });
+      if (!isMultiTab) {
+        tabSectionsHtml.push(docBodyHtml);
       } else {
-        pagesToCreate.push({
-          name: pageName,
-          type: "text",
-          sort: sortValue,
-          title: { show: true, level: headingLevel },
-          text: { content: pageHtml, format: 1 },
-          ownership: pageOwnership,
-          flags: { [MODULE_ID]: pageFlags }
-        });
-      }
-    }
+        const showFirstTabHeading =
+          idx === 0 &&
+          cleanDocName.toLowerCase() !== "main" &&
+          cleanDocName.toLowerCase() !== (resource.name || "").toLowerCase();
 
-    if (pagesToCreate.length > 0) {
-      const createdPages = await masterJournal.createEmbeddedDocuments("JournalEntryPage", pagesToCreate);
-      for (const p of createdPages) {
-        const dId = p.getFlag(MODULE_ID, FLAGS.DOCUMENT_ID);
-        const rId = p.getFlag(MODULE_ID, FLAGS.RESOURCE_ID);
-        if (dId) localIndex.byDocumentId.set(dId, { entry: masterJournal, page: p });
-        if (rId) {
-          const list = localIndex.pagesByResourceId.get(rId) ?? [];
-          list.push(p);
-          localIndex.pagesByResourceId.set(rId, list);
+        let separatorHtml = "";
+        if (idx > 0) {
+          separatorHtml = `<div class="lk-tab-separator" data-lk-generated="true"><hr class="lk-tab-hr" /><h2 class="lk-tab-title"><i class="fas fa-bookmark"></i> ${escapeHtml(cleanDocName)}</h2></div>\n`;
+        } else if (showFirstTabHeading) {
+          separatorHtml = `<div class="lk-tab-separator lk-tab-first" data-lk-generated="true"><h2 class="lk-tab-title"><i class="fas fa-bookmark"></i> ${escapeHtml(cleanDocName)}</h2></div>\n`;
+        }
+
+        const sectionInner = `<div class="lk-doc-tab-section" data-lk-doc-id="${escapeHtml(doc.id)}" data-lk-doc-type="${escapeHtml(doc.type)}" data-lk-doc-name="${escapeHtml(cleanDocName)}">${separatorHtml}${docBodyHtml}</div>`;
+        if (doc.isHidden && !effectiveResourceHidden && hiddenHandling === "gmOnly") {
+          tabSectionsHtml.push(`<section class="secret">${sectionInner}</section>`);
+        } else {
+          tabSectionsHtml.push(sectionInner);
         }
       }
     }
 
-    if (pagesToUpdate.length > 0) {
-      await masterJournal.updateEmbeddedDocuments("JournalEntryPage", pagesToUpdate);
+    const combinedBodyHtml = tabSectionsHtml.join("\n");
+    const pageHtml = `${headerHtml}${combinedBodyHtml}${footerHtml}`;
+    const pageName = resource.name || "Untitled";
+    const headingLevel = Math.min(Math.max(depth + 1, 1), 3);
+    const newPageHash = computeContentHash(`${pageName}|${stripGeneratedHtml(pageHtml)}`);
+    const pageOwnership = this.#computePageOwnership(effectiveResourceHidden);
+    const pageHasChildren = Boolean(Array.isArray(childResourceIds) && childResourceIds.length > 0);
+    const firstDoc = docs[0];
+    const firstMeta = tabDocsMeta[0];
+
+    const pageFlags = {
+      [FLAGS.RESOURCE_ID]: resource.id,
+      [FLAGS.RESOURCE_NAME]: resource.name,
+      [FLAGS.PARENT_ID]: resource.parentId || null,
+      [FLAGS.DOCUMENT_ID]: firstDoc?.id || null,
+      [FLAGS.DOCUMENT_TYPE]: firstDoc?.type || "page",
+      [FLAGS.IS_PRIMARY_DOC]: true,
+      [FLAGS.TAB_DOCS_META]: tabDocsMeta,
+      [FLAGS.TREE_DEPTH]: depth,
+      [FLAGS.HAS_CHILDREN]: pageHasChildren,
+      [FLAGS.VERSION]: firstMeta?.version || null,
+      [FLAGS.PAGE_HASH]: newPageHash,
+      [FLAGS.LK_UPDATED_AT]: resource.updatedAt || new Date().toISOString(),
+      [FLAGS.LAST_SYNCED_AT]: Date.now(),
+      [FLAGS.IS_HIDDEN]: effectiveResourceHidden,
+      [FLAGS.TAGS]: resource.tags || [],
+      [FLAGS.ALIASES]: resource.aliases || [],
+      [FLAGS.PRESERVED_BLOCKS]: firstMeta?.preservedBlocks || []
+    };
+
+    let targetPage = primaryPage;
+    if (primaryPage) {
+      await masterJournal.updateEmbeddedDocuments("JournalEntryPage", [
+        {
+          _id: primaryPage.id,
+          name: pageName,
+          type: "text",
+          sort: baseSort,
+          title: { show: true, level: headingLevel },
+          text: { content: pageHtml, format: 1 },
+          ownership: { ...(primaryPage.ownership || {}), ...pageOwnership },
+          flags: { [MODULE_ID]: pageFlags }
+        }
+      ]);
+    } else {
+      const createdPages = await masterJournal.createEmbeddedDocuments("JournalEntryPage", [
+        {
+          name: pageName,
+          type: "text",
+          sort: baseSort,
+          title: { show: true, level: headingLevel },
+          text: { content: pageHtml, format: 1 },
+          ownership: pageOwnership,
+          flags: { [MODULE_ID]: pageFlags }
+        }
+      ]);
+      targetPage = createdPages[0] || null;
     }
 
-    return { abandoned: abandonedAny };
+    if (extraLegacyPages.length > 0) {
+      try {
+        await masterJournal.deleteEmbeddedDocuments(
+          "JournalEntryPage",
+          extraLegacyPages.map((p) => p.id)
+        );
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+
+    if (targetPage) {
+      localIndex.pagesByResourceId.set(resource.id, [targetPage]);
+      for (const tm of tabDocsMeta) {
+        if (tm.documentId) {
+          localIndex.byDocumentId.set(tm.documentId, { entry: masterJournal, page: targetPage });
+        }
+      }
+    }
+
+    return { abandoned: false };
   }
 
   /**
@@ -2387,6 +2384,84 @@ export class LegendKeeperSyncEngine {
 
       for (const page of pages) {
         if (page.type !== "text") continue;
+        const pageContent = page.text?.content || "";
+        const storedPageHash = page.getFlag(MODULE_ID, FLAGS.PAGE_HASH);
+        const currentPageHash = computePageHash(page);
+        const localChanged = Boolean(!storedPageHash || currentPageHash !== storedPageHash);
+
+        const parser = new DOMParser();
+        const parsedDom = parser.parseFromString(pageContent, "text/html");
+        const tabSectionEls = Array.from(parsedDom.querySelectorAll(".lk-doc-tab-section[data-lk-doc-id]"));
+
+        if (tabSectionEls.length > 0) {
+          const storedTabMeta = page.getFlag(MODULE_ID, FLAGS.TAB_DOCS_META) || [];
+          const metaByDocId = new Map(
+            Array.isArray(storedTabMeta) ? storedTabMeta.map((m) => [m.documentId, { ...m }]) : []
+          );
+          let anyPushed = false;
+
+          for (const secEl of tabSectionEls) {
+            const tabDocId = secEl.getAttribute("data-lk-doc-id");
+            const tabDocType = secEl.getAttribute("data-lk-doc-type") || "page";
+            if (!tabDocId || (tabDocType !== "page" && tabDocType !== "blank")) continue;
+
+            const remoteDoc = remoteDocsById.get(tabDocId);
+            if (!remoteDoc) continue;
+
+            const remoteDocBlocks = await lk.documents.getBlocks({ resourceId, documentId: tabDocId });
+            const tabMeta = metaByDocId.get(tabDocId) || { documentId: tabDocId, type: tabDocType };
+            const storedVersion = tabMeta.version;
+            const remoteChanged = Boolean(storedVersion && remoteDocBlocks.version !== storedVersion);
+
+            if (!localChanged && !remoteChanged) continue;
+
+            if (localChanged && remoteChanged) {
+              let decision = "keep-foundry";
+              if (conflictPolicy === "skip") {
+                decision = "cancel";
+              } else if (conflictPolicy === "preferLK") {
+                decision = "keep-lk";
+              } else {
+                decision = await promptPageConflictResolution({
+                  resourceName: remoteResource.name,
+                  pageName: remoteDoc.name || "Tab",
+                  remoteText: remoteDocBlocks.text || "",
+                  localHtml: secEl.innerHTML || "",
+                  operation: "push"
+                });
+              }
+              if (decision === "cancel" || decision === "keep-lk") continue;
+            }
+
+            const blocks = await htmlToBlocks(secEl.innerHTML || "", {
+              ...converterContext,
+              preservedBlocks: tabMeta.preservedBlocks || []
+            });
+
+            const written = await lk.documents.replaceBlocks(
+              { resourceId, documentId: tabDocId },
+              { blocks, ifMatch: remoteDocBlocks.version }
+            );
+            tabMeta.version = written.version;
+            metaByDocId.set(tabDocId, tabMeta);
+            anyPushed = true;
+          }
+
+          if (anyPushed) {
+            const updatedTabMeta = Array.from(metaByDocId.values());
+            await page.update({
+              flags: {
+                [MODULE_ID]: {
+                  [FLAGS.TAB_DOCS_META]: updatedTabMeta,
+                  [FLAGS.VERSION]: updatedTabMeta[0]?.version || page.getFlag(MODULE_ID, FLAGS.VERSION),
+                  [FLAGS.PAGE_HASH]: computePageHash(page)
+                }
+              }
+            });
+          }
+          continue;
+        }
+
         const docTypeFlag = page.getFlag(MODULE_ID, FLAGS.DOCUMENT_TYPE);
         if (docTypeFlag && docTypeFlag !== "page" && docTypeFlag !== "blank") continue;
 
@@ -2396,11 +2471,7 @@ export class LegendKeeperSyncEngine {
 
         const remoteDocBlocks = await lk.documents.getBlocks({ resourceId, documentId: docId });
         const storedVersion = page.getFlag(MODULE_ID, FLAGS.VERSION);
-        const storedPageHash = page.getFlag(MODULE_ID, FLAGS.PAGE_HASH);
-        const currentPageHash = computePageHash(page);
-
         const remoteChanged = Boolean(storedVersion && remoteDocBlocks.version !== storedVersion);
-        const localChanged = Boolean(!storedPageHash || currentPageHash !== storedPageHash);
 
         if (!localChanged && !remoteChanged) continue;
 
