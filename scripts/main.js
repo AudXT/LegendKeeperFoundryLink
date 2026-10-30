@@ -1,6 +1,6 @@
-import { MODULE_ID, MODULE_VERSION, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "./constants.js?v=1.2.9";
-import { LegendKeeperSyncEngine } from "./sync/sync-engine.js?v=1.2.9";
-import { LegendKeeperSyncManagerApp } from "./ui/sync-manager-app.js?v=1.2.9";
+import { MODULE_ID, MODULE_VERSION, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "./constants.js?v=1.2.10";
+import { LegendKeeperSyncEngine } from "./sync/sync-engine.js?v=1.2.10";
+import { LegendKeeperSyncManagerApp } from "./ui/sync-manager-app.js?v=1.2.10";
 
 console.log(`LegendKeeper Sync | Loaded v${MODULE_VERSION}`);
 
@@ -250,7 +250,23 @@ Hooks.once("init", () => {
   }
 });
 
-Hooks.once("ready", () => {
+Hooks.once("ready", async () => {
+  // Automatically migrate legacy default worker URL or bare legendkeeper.com to https://www.legendkeeper.com
+  if (game.user?.isGM) {
+    try {
+      const savedBaseUrl = (game.settings.get(MODULE_ID, SETTINGS.BASE_URL) || "").trim().replace(/\/+$/, "");
+      if (
+        savedBaseUrl === "https://falling-base-1b54.izimmerman11.workers.dev" ||
+        savedBaseUrl === "https://legendkeeper.com" ||
+        savedBaseUrl === "http://legendkeeper.com"
+      ) {
+        await game.settings.set(MODULE_ID, SETTINGS.BASE_URL, DEFAULT_BASE_URL);
+      }
+    } catch {
+      // Ignore if setting cannot be updated
+    }
+  }
+
   // Mask the API key input in the Settings Configuration sheet as a password field
   Hooks.on("renderSettingsConfig", (_app, html) => {
     const root = html instanceof HTMLElement ? html : html?.[0];

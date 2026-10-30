@@ -63,47 +63,17 @@ A Foundry VTT (v12 / v13) module that provides **two-way synchronization** betwe
 
 ---
 
-## Setup & CORS Proxy Configuration
+## Setup & Configuration
 
 ### Step 1: Generate a LegendKeeper API Key
 1. In LegendKeeper, open your project and navigate to **Project Settings → Developers → API Keys**.
 2. Create an API key with the **Admin** role (recommended so the key can create/update top-level resources and read hidden content) and copy the `lk_...` secret.
 3. In Foundry VTT, go to **Game Settings → Configure Settings → LegendKeeper Journal Sync** and paste your `lk_...` key into **LegendKeeper API Key**.
 
-### Step 2: Configure the CORS Proxy
-LegendKeeper's v3 REST API does not include browser `Access-Control-Allow-Origin` (CORS) headers on `OPTIONS` preflight requests. Because Foundry VTT modules make API calls directly from the user's web browser, requests must pass through a lightweight CORS proxy that adds CORS headers and forwards requests to `https://www.legendkeeper.com`.
-
-You have **two ways** to run this proxy:
-
-#### Option A (Recommended): Free Cloudflare Worker (One-Time Setup, Works Anywhere)
-Setting up a free Cloudflare Worker takes about 1 minute, requires zero maintenance, stores no secrets or API keys (your `lk_...` header simply passes through over HTTPS), and works from **any computer, network, or remote player/GM session** without needing a terminal running on your server.
-
-1. Sign in or create a free account at [https://dash.cloudflare.com](https://dash.cloudflare.com).
-2. In the left sidebar, go to **Compute (Workers) → Workers & Pages** and click **Create**.
-3. Click **Start with Hello World!** (or **Create Worker**) and click **Deploy** (Cloudflare will assign a URL like `https://<worker-name>.<your-subdomain>.workers.dev`).
-4. Click **Edit code** in the top-right corner of the Worker page.
-5. Delete the template code in `worker.js`, paste the entire contents of [`tools/cloudflare-worker.js`](tools/cloudflare-worker.js) from this repository, and click **Deploy** in the top-right corner.
-6. Copy your Worker URL (e.g. `https://falling-base-1b54.<your-subdomain>.workers.dev`) and paste it into **Foundry VTT → Configure Settings → LegendKeeper Journal Sync → API Base URL / CORS Proxy**.
-
-#### Option B (Alternative): Local / Self-Hosted Node.js Proxy (`tools/lk-cors-proxy.mjs`)
-If you prefer to run a local proxy on your own computer or home server without Cloudflare, a zero-dependency Node.js script is included in [`tools/lk-cors-proxy.mjs`](tools/lk-cors-proxy.mjs).
-
-1. Run the proxy on a machine with Node.js (v18+):
-   ```bash
-   node tools/lk-cors-proxy.mjs
-   ```
-   By default it listens on `http://0.0.0.0:8787` (you can customize the port with `LK_PROXY_PORT=8787 node tools/lk-cors-proxy.mjs`).
-2. To keep it running in the background on a home server, you can use `pm2`:
-   ```bash
-   npm install -g pm2
-   pm2 start tools/lk-cors-proxy.mjs --name lk-cors-proxy
-   pm2 save
-   pm2 startup
-   ```
-3. Set **API Base URL / CORS Proxy** in Foundry Module Settings to:
-   - `http://localhost:8787` (if running the proxy on the same PC as your browser), or
-   - `http://<your-server-lan-ip>:8787` (if running on a home server on the same local network).
-   - *Note*: If you access your Foundry server remotely over **HTTPS** (e.g., via a domain name or Cloudflare Tunnel), modern browsers block plain `http://` LAN requests as "Mixed Content". For remote/HTTPS access, either use **Option A (Cloudflare Worker)** above or expose the local proxy over HTTPS via your reverse proxy / Cloudflare Tunnel.
+### Step 2: Test Connection & Sync
+1. **API Base URL** defaults to `https://www.legendkeeper.com` and connects directly to LegendKeeper's v3 REST API out of the box (no proxy required).
+2. Open **LegendKeeper Sync** from the **Journal Directory** sidebar (or **Module Settings**) and click **Test Connection** to verify your API key and project connection.
+3. Click **Pull All from LK** to import your LegendKeeper wiki into Foundry VTT!
 
 ---
 

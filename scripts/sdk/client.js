@@ -320,7 +320,7 @@ async function sendOnce(config, spec) {
       rawMsg.includes("NetworkError") ||
       rawMsg.includes("Load failed");
     const hint = isCorsLikely
-      ? `${rawMsg}. If calling LegendKeeper directly from the browser is blocked by CORS, start the included proxy ('node tools/lk-cors-proxy.mjs') and set the API Base URL in Module Settings to http://localhost:8787.`
+      ? `${rawMsg}. Check your internet connection and verify that API Base URL in Module Settings is set to https://www.legendkeeper.com (including 'www.').`
       : rawMsg;
     throw new ConnectionError(hint, cause);
   } finally {

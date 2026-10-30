@@ -1,5 +1,5 @@
 export const MODULE_ID = "legendkeeper-foundry-sync";
-export const MODULE_VERSION = "1.2.9";
+export const MODULE_VERSION = "1.2.10";
 
 export const SETTINGS = {
   API_KEY: "apiKey",
@@ -53,4 +53,4 @@ export const FLAGS = {
   ASSET_MAP: "assetMap"
 };
 
-export const DEFAULT_BASE_URL = "https://falling-base-1b54.izimmerman11.workers.dev";
+export const DEFAULT_BASE_URL = "https://www.legendkeeper.com";

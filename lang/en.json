@@ -18,8 +18,8 @@
         "Hint": "Project-scoped API key (starts with lk_...) generated in LegendKeeper under Project Settings → Developers → API Keys (Admin role recommended)."
       },
       "BaseUrl": {
-        "Name": "API Base URL / CORS Proxy",
-        "Hint": "URL of the CORS proxy forwarding browser requests to LegendKeeper's API. Defaults to a Cloudflare Worker proxy so it works from any network over HTTPS. You can also deploy your own Cloudflare Worker (tools/cloudflare-worker.js) or run the local proxy ('node tools/lk-cors-proxy.mjs' at http://localhost:8787)."
+        "Name": "API Base URL",
+        "Hint": "Base URL for the LegendKeeper v3 REST API. Defaults to 'https://www.legendkeeper.com' (connects directly to LegendKeeper with no proxy required). Be sure to include 'www.' so the browser does not hit a redirect."
       },
       "ProjectId": {
         "Name": "Project ID (Optional)",

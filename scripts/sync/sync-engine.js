@@ -1,9 +1,9 @@
-import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.2.9";
+import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.2.10";
 import {
   LegendKeeper,
   NotFoundError,
   VersionMismatchError
-} from "../sdk/client.js?v=1.2.9";
+} from "../sdk/client.js?v=1.2.10";
 import {
   blocksToHtml,
   escapeHtml,
@@ -11,9 +11,9 @@ import {
   renderResourceDecorationHtml,
   renderMapDocumentHtml,
   renderTimelineDocumentHtml
-} from "../converter/blocks-to-html.js?v=1.2.9";
-import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.2.9";
-import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.2.9";
+} from "../converter/blocks-to-html.js?v=1.2.10";
+import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.2.10";
+import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.2.10";
 
 /**
  * Computes a deterministic string hash (FNV-1a 32-bit hex) for detecting local journal modifications
@@ -114,7 +114,16 @@ export class LegendKeeperSyncEngine {
     if (!apiKey) {
       throw new Error(game.i18n.localize("LK_SYNC.Notifications.NoApiKey"));
     }
-    const baseUrl = (this.getSetting(SETTINGS.BASE_URL, DEFAULT_BASE_URL) || DEFAULT_BASE_URL).trim();
+    let baseUrl = (this.getSetting(SETTINGS.BASE_URL, DEFAULT_BASE_URL) || DEFAULT_BASE_URL)
+      .trim()
+      .replace(/\/+$/, "");
+    if (
+      baseUrl === "https://legendkeeper.com" ||
+      baseUrl === "http://legendkeeper.com" ||
+      baseUrl === "https://falling-base-1b54.izimmerman11.workers.dev"
+    ) {
+      baseUrl = DEFAULT_BASE_URL;
+    }
     const projectId = (this.getSetting(SETTINGS.PROJECT_ID, "") || "").trim();
     const cacheKey = `${apiKey}|${baseUrl}|${projectId}`;
 
