@@ -1,4 +1,4 @@
-import { MODULE_ID, MODULE_VERSION } from "../constants.js?v=1.2.4";
+import { MODULE_ID, MODULE_VERSION } from "../constants.js?v=1.2.5";
 
 const BaseApp = globalThis.foundry?.applications?.api?.ApplicationV2
   ? globalThis.foundry.applications.api.HandlebarsApplicationMixin(
@@ -169,24 +169,29 @@ export class LegendKeeperSyncManagerApp extends BaseApp {
 
       case "push-single": {
         const journalId = el.dataset.journalId;
+        const resourceId = el.dataset.resourceId || null;
         const name = el.dataset.name || journalId;
-        if (journalId) await this.handlePushSingle(journalId, name);
+        if (journalId) await this.handlePushSingle(journalId, name, resourceId);
         break;
       }
 
       case "open-journal": {
         const journalId = el.dataset.journalId;
+        const pageId = el.dataset.pageId || undefined;
         const entry = game.journal?.get?.(journalId);
-        entry?.sheet?.render?.(true);
+        if (entry) {
+          entry.sheet?.render?.(true, pageId ? { pageId } : {});
+        }
         break;
       }
 
       case "unlink-journal": {
         const journalId = el.dataset.journalId;
+        const resourceId = el.dataset.resourceId || null;
         const name = el.dataset.name || "";
         const entry = game.journal?.get?.(journalId);
         if (entry) {
-          await this.syncEngine.unlinkJournal(entry);
+          await this.syncEngine.unlinkJournal(entry, { resourceId });
           ui.notifications?.info(game.i18n.format("LK_SYNC.Notifications.Unlinked", { name }));
           await this.refreshData();
         }
@@ -334,13 +339,13 @@ export class LegendKeeperSyncManagerApp extends BaseApp {
     }
   }
 
-  async handlePushSingle(journalId, name) {
+  async handlePushSingle(journalId, name, resourceId = null) {
     const entry = game.journal?.get?.(journalId);
     if (!entry) return;
     this.isBusy = true;
     this.#setProgress(`Pushing "${name}"...`, 1, 2);
     try {
-      await this.syncEngine.pushJournal(entry);
+      await this.syncEngine.pushJournal(entry, { resourceId });
       ui.notifications?.info(game.i18n.format("LK_SYNC.Notifications.SinglePushSuccess", { name }));
     } catch (err) {
       console.error("LegendKeeper Sync | Push Single error:", err);

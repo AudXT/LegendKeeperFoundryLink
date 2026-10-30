@@ -239,6 +239,7 @@
                     class="lk-icon-btn"
                     data-action="push-single"
                     data-journal-id="{{this.journalId}}"
+                    data-resource-id="{{this.resourceId}}"
                     data-name="{{this.name}}"
                     title="Check LegendKeeper for remote edits first, then push '{{this.name}}' from Foundry to LegendKeeper"
                     {{#if ../isBusy}}disabled{{/if}}
@@ -250,7 +251,8 @@
                     class="lk-icon-btn"
                     data-action="open-journal"
                     data-journal-id="{{this.journalId}}"
-                    title="Open '{{this.name}}' Journal Entry in Foundry"
+                    data-page-id="{{this.pageId}}"
+                    title="Open '{{this.name}}' in Foundry"
                   >
                     <i class="fas fa-book-open"></i>
                   </button>
@@ -261,8 +263,9 @@
                     class="lk-icon-btn lk-btn-danger"
                     data-action="unlink-journal"
                     data-journal-id="{{this.journalId}}"
+                    data-resource-id="{{this.resourceId}}"
                     data-name="{{this.name}}"
-                    title="Unlink '{{this.name}}' from LegendKeeper (keeps both the Foundry Journal and LegendKeeper article, but stops syncing them together)"
+                    title="Unlink '{{this.name}}' from LegendKeeper (keeps both the Foundry Journal/Page and LegendKeeper article, but stops syncing them together)"
                     {{#if ../isBusy}}disabled{{/if}}
                   >
                     <i class="fas fa-unlink"></i>

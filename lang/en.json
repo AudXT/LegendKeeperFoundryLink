@@ -27,7 +27,16 @@
       },
       "RootFolderName": {
         "Name": "Root Journal Folder Name",
-        "Hint": "Top-level Foundry Journal folder that holds the auto-generated '📖 LegendKeeper Wiki Index' journal and all synced LegendKeeper pages. Leave empty to place them at the Journal root."
+        "Hint": "Top-level Foundry Journal folder where synced LegendKeeper content is placed. Leave empty to place at the Journal root."
+      },
+      "FolderMode": {
+        "Name": "Journal & Folder Organization Mode",
+        "Hint": "Choose how LegendKeeper articles are organized in Foundry VTT. Switching modes and clicking 'Pull All from LK' automatically migrates and cleans up the previous layout.",
+        "Choices": {
+          "singleFolder": "Single Top-Level Folder + Wiki Index (One Journal per Article)",
+          "nestedFolders": "Nested Folders (up to Foundry's 4-Level Limit) + Path Names Below + Wiki Index",
+          "singleJournal": "Single Master Journal Entry (Entire Wiki as Pages Inside One Journal)"
+        }
       },
       "SecretHandling": {
         "Name": "LegendKeeper Secret Handling",

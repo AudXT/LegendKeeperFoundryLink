@@ -1,6 +1,6 @@
-import { MODULE_ID, MODULE_VERSION, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "./constants.js?v=1.2.4";
-import { LegendKeeperSyncEngine } from "./sync/sync-engine.js?v=1.2.4";
-import { LegendKeeperSyncManagerApp } from "./ui/sync-manager-app.js?v=1.2.4";
+import { MODULE_ID, MODULE_VERSION, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "./constants.js?v=1.2.5";
+import { LegendKeeperSyncEngine } from "./sync/sync-engine.js?v=1.2.5";
+import { LegendKeeperSyncManagerApp } from "./ui/sync-manager-app.js?v=1.2.5";
 
 console.log(`LegendKeeper Sync | Loaded v${MODULE_VERSION}`);
 
@@ -84,6 +84,21 @@ function registerSettings() {
     restricted: true,
     type: String,
     default: "LegendKeeper"
+  });
+
+  game.settings.register(MODULE_ID, SETTINGS.FOLDER_MODE, {
+    name: "LK_SYNC.Settings.FolderMode.Name",
+    hint: "LK_SYNC.Settings.FolderMode.Hint",
+    scope: "world",
+    config: true,
+    restricted: true,
+    type: String,
+    choices: {
+      singleFolder: "LK_SYNC.Settings.FolderMode.Choices.singleFolder",
+      nestedFolders: "LK_SYNC.Settings.FolderMode.Choices.nestedFolders",
+      singleJournal: "LK_SYNC.Settings.FolderMode.Choices.singleJournal"
+    },
+    default: "singleFolder"
   });
 
   game.settings.register(MODULE_ID, SETTINGS.SECRET_HANDLING, {
@@ -188,7 +203,8 @@ function scheduleAutoPush(journalEntry) {
   if (!syncEngine.getSetting(SETTINGS.AUTO_SYNC_ON_SAVE, false)) return;
 
   const resourceId = journalEntry?.getFlag?.(MODULE_ID, FLAGS.RESOURCE_ID);
-  if (!resourceId) return;
+  const isMaster = journalEntry?.getFlag?.(MODULE_ID, FLAGS.IS_MASTER_JOURNAL);
+  if (!resourceId && !isMaster) return;
 
   const existingTimer = autoSyncTimers.get(journalEntry.id);
   if (existingTimer) clearTimeout(existingTimer);

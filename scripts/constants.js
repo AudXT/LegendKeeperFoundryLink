@@ -1,11 +1,12 @@
 export const MODULE_ID = "legendkeeper-foundry-sync";
-export const MODULE_VERSION = "1.2.4";
+export const MODULE_VERSION = "1.2.5";
 
 export const SETTINGS = {
   API_KEY: "apiKey",
   BASE_URL: "baseUrl",
   PROJECT_ID: "projectId",
   ROOT_FOLDER_NAME: "rootFolderName",
+  FOLDER_MODE: "folderMode",
   SECRET_HANDLING: "secretHandling",
   HIDDEN_RESOURCE_HANDLING: "hiddenResourceHandling",
   CONFLICT_POLICY: "conflictPolicy",
@@ -23,6 +24,7 @@ export const FLAGS = {
   PARENT_ID: "parentId",
   DOCUMENT_ID: "documentId",
   DOCUMENT_TYPE: "documentType",
+  IS_PRIMARY_DOC: "isPrimaryDoc",
   VERSION: "version",
   PAGE_HASH: "pageHash",
   LK_UPDATED_AT: "lkUpdatedAt",
@@ -42,6 +44,8 @@ export const FLAGS = {
   IS_ROOT_FOLDER: "isRootFolder",
   OVERFLOW_TIER: "overflowTier",
   IS_INDEX_JOURNAL: "isIndexJournal",
+  IS_MASTER_JOURNAL: "isMasterJournal",
+  IS_INDEX_PAGE: "isIndexPage",
   ASSET_MAP: "assetMap"
 };
 
