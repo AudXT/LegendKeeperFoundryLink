@@ -232,7 +232,11 @@ export function domNodesToRuns(nodes, activeMarks = {}, context = {}) {
     // Internal lk:// link span
     if (el.classList.contains("lk-link-internal") && el.getAttribute("data-lk-href")) {
       const href = el.getAttribute("data-lk-href");
-      const text = el.textContent?.replace(/@UUID\[[^\]]+\]\{([^}]*)\}/, "$1")?.trim() || "Link";
+      const rawText =
+        el.getAttribute("data-lk-clean-label") ||
+        el.textContent?.replace(/@UUID\[[^\]]+\]\{([^}]*)\}/, "$1")?.trim() ||
+        "Link";
+      const text = rawText.replace(/^\s*(?:📖\s*)?LegendKeeper\s+Wiki(?:\s+Index)?\s*(?:\/|:|-|—|›)\s*/i, "").trim() || "Link";
       out.push(buildMarkedTextRun(text, { ...activeMarks, link: href }));
       continue;
     }
@@ -240,7 +244,8 @@ export function domNodesToRuns(nodes, activeMarks = {}, context = {}) {
     // Foundry enriched content-link anchor: <a class="content-link" data-uuid="...">Label</a>
     if (tag === "a" && (el.classList.contains("content-link") || el.hasAttribute("data-uuid") || el.hasAttribute("data-id"))) {
       const uuid = el.getAttribute("data-uuid") || (el.getAttribute("data-id") ? `JournalEntry.${el.getAttribute("data-id")}` : "");
-      const label = (el.textContent ?? "").trim();
+      const rawLabel = (el.getAttribute("data-lk-clean-label") || el.textContent || "").trim();
+      const label = rawLabel.replace(/^\s*(?:📖\s*)?LegendKeeper\s+Wiki(?:\s+Index)?\s*(?:\/|:|-|—|›)\s*/i, "").trim();
       const resolved = uuid ? context.resolveUuidToLk?.(uuid) : null;
       if (resolved?.resourceId) {
         const mentionObj = { resourceId: resolved.resourceId };

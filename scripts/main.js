@@ -1,12 +1,13 @@
-import { MODULE_ID, MODULE_VERSION, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "./constants.js?v=1.2.5";
-import { LegendKeeperSyncEngine } from "./sync/sync-engine.js?v=1.2.5";
-import { LegendKeeperSyncManagerApp } from "./ui/sync-manager-app.js?v=1.2.5";
+import { MODULE_ID, MODULE_VERSION, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "./constants.js?v=1.2.6";
+import { LegendKeeperSyncEngine } from "./sync/sync-engine.js?v=1.2.6";
+import { LegendKeeperSyncManagerApp } from "./ui/sync-manager-app.js?v=1.2.6";
 
 console.log(`LegendKeeper Sync | Loaded v${MODULE_VERSION}`);
 
 let syncEngine = null;
 let syncManagerApp = null;
 const autoSyncTimers = new Map();
+const collapsedFoldersByJournalId = new Map();
 
 /**
  * Opens or focuses the LegendKeeper Sync Manager window.
@@ -387,3 +388,237 @@ Hooks.on("updateJournalEntryPage", (pageDocument, _change, _options, userId) => 
     scheduleAutoPush(pageDocument.parent);
   }
 });
+
+/* -------------------------------------------- */
+/*  Single-Journal Hierarchy & Link Enhancers   */
+/* -------------------------------------------- */
+
+const LK_WIKI_PREFIX_REGEX = /^\s*(?:📖\s*)?LegendKeeper\s+Wiki(?:\s+Index)?\s*(?:\/|:|-|—|›)\s*/i;
+
+/**
+ * Strips any redundant "📖 LegendKeeper Wiki / " or "LegendKeeper Wiki/" prefix that Foundry or
+ * third-party modules prepend onto JournalEntryPage content links inside synced journals.
+ */
+function stripRedundantWikiLinkPrefixes(rootElement) {
+  if (!rootElement || typeof rootElement.querySelectorAll !== "function") return;
+  const links = rootElement.querySelectorAll("a.content-link, a.lk-content-link");
+  for (const a of links) {
+    const cleanAttr = a.getAttribute("data-lk-clean-label");
+    for (const node of Array.from(a.childNodes)) {
+      if (node.nodeType === 3) {
+        const val = node.nodeValue || "";
+        if (LK_WIKI_PREFIX_REGEX.test(val)) {
+          const stripped = val.replace(LK_WIKI_PREFIX_REGEX, "");
+          node.nodeValue = stripped || cleanAttr || val;
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Enhances the left-hand page directory sidebar of the Single Master Journal ("📖 LegendKeeper Wiki")
+ * with true multi-level tree indentation (beyond Foundry's native 3-level cap), folder/leaf icons,
+ * and collapsible folder toggles.
+ */
+function enhanceMasterJournalSidebar(sheetRoot, journalEntry) {
+  if (!sheetRoot || !journalEntry?.getFlag?.(MODULE_ID, FLAGS.IS_MASTER_JOURNAL)) return;
+
+  const parentByResId = new Map();
+  const childrenCountByResId = new Map();
+  const resNameById = new Map();
+
+  for (const p of journalEntry.pages ?? []) {
+    if (p.getFlag(MODULE_ID, FLAGS.IS_INDEX_PAGE)) continue;
+    const rId = p.getFlag(MODULE_ID, FLAGS.RESOURCE_ID);
+    const pId = p.getFlag(MODULE_ID, FLAGS.PARENT_ID);
+    const rName = p.getFlag(MODULE_ID, FLAGS.RESOURCE_NAME) || p.name;
+    if (rId && !resNameById.has(rId)) resNameById.set(rId, rName);
+    if (rId && pId && pId !== "templates" && !parentByResId.has(rId)) {
+      parentByResId.set(rId, pId);
+      childrenCountByResId.set(pId, (childrenCountByResId.get(pId) || 0) + 1);
+    }
+  }
+
+  const metaByPageId = new Map();
+  for (const p of journalEntry.pages ?? []) {
+    if (p.getFlag(MODULE_ID, FLAGS.IS_INDEX_PAGE)) {
+      metaByPageId.set(p.id, {
+        depth: 0,
+        hasChildren: false,
+        isIndex: true,
+        isPrimary: true,
+        ancestorIds: [],
+        pathStr: "",
+        resourceId: null
+      });
+      continue;
+    }
+
+    const rId = p.getFlag(MODULE_ID, FLAGS.RESOURCE_ID);
+    const isPrimary = p.getFlag(MODULE_ID, FLAGS.IS_PRIMARY_DOC) !== false;
+    const ancestorIds = [];
+    let cur = rId ? parentByResId.get(rId) : null;
+    const seen = new Set();
+    while (cur && !seen.has(cur) && resNameById.has(cur)) {
+      seen.add(cur);
+      ancestorIds.unshift(cur);
+      cur = parentByResId.get(cur);
+    }
+
+    const storedDepth = p.getFlag(MODULE_ID, FLAGS.TREE_DEPTH);
+    const computedDepth = ancestorIds.length + (isPrimary ? 0 : 1);
+    const depth = Number.isFinite(storedDepth) ? storedDepth : computedDepth;
+    const storedHasChildren = p.getFlag(MODULE_ID, FLAGS.HAS_CHILDREN);
+    const hasChildren = Boolean(
+      isPrimary && (storedHasChildren ?? (rId && (childrenCountByResId.get(rId) || 0) > 0))
+    );
+    const pathStr = ancestorIds.map((id) => resNameById.get(id)).filter(Boolean).join(" › ");
+
+    metaByPageId.set(p.id, {
+      depth,
+      hasChildren,
+      isIndex: false,
+      isPrimary,
+      ancestorIds,
+      pathStr,
+      resourceId: rId
+    });
+  }
+
+  if (!collapsedFoldersByJournalId.has(journalEntry.id)) {
+    collapsedFoldersByJournalId.set(journalEntry.id, new Set());
+  }
+  const collapsedSet = collapsedFoldersByJournalId.get(journalEntry.id);
+
+  const applySidebarStyles = () => {
+    const sidebarContainer =
+      sheetRoot.querySelector(".journal-sidebar, aside.sidebar") || sheetRoot;
+    const pageItems = sidebarContainer.querySelectorAll("li[data-page-id], .directory-item[data-page-id], .toc-item[data-page-id]");
+
+    for (const itemEl of pageItems) {
+      const pageId = itemEl.getAttribute("data-page-id");
+      const meta = pageId ? metaByPageId.get(pageId) : null;
+      if (!meta) continue;
+
+      itemEl.classList.add("lk-master-toc-item");
+      itemEl.setAttribute("data-lk-depth", String(meta.depth));
+      itemEl.setAttribute("data-lk-has-children", meta.hasChildren ? "true" : "false");
+      itemEl.classList.toggle("lk-toc-folder", meta.hasChildren);
+      itemEl.classList.toggle("lk-toc-index", meta.isIndex);
+
+      const indentPx = meta.isIndex ? 6 : 6 + meta.depth * 14;
+      itemEl.style.setProperty("--lk-depth", String(meta.depth));
+      itemEl.style.setProperty("padding-left", `${indentPx}px`, "important");
+
+      const headingEl = itemEl.querySelector(".page-heading");
+      if (headingEl) {
+        headingEl.style.setProperty("padding-left", "0px", "important");
+        headingEl.style.setProperty("margin-left", "0px", "important");
+      }
+
+      if (meta.pathStr) {
+        const pageDoc = journalEntry.pages.get(pageId);
+        itemEl.setAttribute("title", `${meta.pathStr} › ${pageDoc?.name || ""}`);
+      }
+
+      const isHiddenByCollapse = meta.ancestorIds.some((ancId) => collapsedSet.has(ancId));
+      itemEl.classList.toggle("lk-toc-hidden-by-collapse", isHiddenByCollapse);
+
+      const titleEl = itemEl.querySelector(".page-title") || headingEl;
+      if (titleEl && !meta.isIndex) {
+        let prefixEl = itemEl.querySelector(".lk-toc-prefix");
+        if (!prefixEl) {
+          prefixEl = document.createElement("span");
+          prefixEl.className = "lk-toc-prefix";
+          titleEl.parentNode?.insertBefore(prefixEl, titleEl);
+        }
+
+        if (meta.hasChildren && meta.resourceId) {
+          const isCollapsed = collapsedSet.has(meta.resourceId);
+          const desiredState = isCollapsed ? "collapsed" : "expanded";
+          if (prefixEl.getAttribute("data-lk-state") !== desiredState) {
+            prefixEl.setAttribute("data-lk-state", desiredState);
+            prefixEl.innerHTML = `<span class="lk-toc-caret" title="Collapse / Expand Folder">${isCollapsed ? "▸" : "▾"}</span><i class="fas ${isCollapsed ? "fa-folder" : "fa-folder-open"} lk-toc-folder-icon"></i>`;
+          }
+          if (!prefixEl.dataset.lkBound) {
+            prefixEl.dataset.lkBound = "true";
+            prefixEl.addEventListener("click", (ev) => {
+              ev.preventDefault();
+              ev.stopPropagation();
+              if (collapsedSet.has(meta.resourceId)) {
+                collapsedSet.delete(meta.resourceId);
+              } else {
+                collapsedSet.add(meta.resourceId);
+              }
+              applySidebarStyles();
+            });
+          }
+        } else if (!prefixEl.getAttribute("data-lk-state")) {
+          prefixEl.setAttribute("data-lk-state", "leaf");
+          const branchConnector = meta.depth > 0 ? `<span class="lk-toc-leaf-marker">└</span>` : "";
+          prefixEl.innerHTML = `${branchConnector}<i class="fas fa-file-lines lk-toc-leaf-icon"></i>`;
+        }
+      }
+    }
+  };
+
+  applySidebarStyles();
+
+  const listEl = sheetRoot.querySelector(
+    ".journal-sidebar .directory-list, .journal-sidebar .toc, aside.sidebar .directory-list, aside.sidebar .toc"
+  );
+  if (listEl && !listEl._lkHierarchyObserver) {
+    const observer = new MutationObserver((mutations) => {
+      const needsRefresh = mutations.some((m) =>
+        Array.from(m.addedNodes).some(
+          (n) => n.nodeType === 1 && (n.hasAttribute?.("data-page-id") || n.querySelector?.("[data-page-id]"))
+        )
+      );
+      if (needsRefresh) {
+        applySidebarStyles();
+      }
+    });
+    observer.observe(listEl, { childList: true, subtree: true });
+    listEl._lkHierarchyObserver = observer;
+  }
+}
+
+function handleSyncedJournalRender(app, html) {
+  const root = html instanceof HTMLElement ? html : html?.[0];
+  if (!root) return;
+
+  const doc = app?.document || app?.object;
+  const journalEntry =
+    doc?.documentName === "JournalEntry"
+      ? doc
+      : doc?.parent?.documentName === "JournalEntry"
+        ? doc.parent
+        : null;
+
+  const isLkJournal = Boolean(
+    journalEntry &&
+      (journalEntry.getFlag(MODULE_ID, FLAGS.IS_MASTER_JOURNAL) ||
+        journalEntry.getFlag(MODULE_ID, FLAGS.IS_INDEX_JOURNAL) ||
+        journalEntry.getFlag(MODULE_ID, FLAGS.RESOURCE_ID))
+  );
+  if (!isLkJournal) return;
+
+  const sheetRoot = root.closest?.(".app, .application, .journal-sheet, .journal-entry") || root;
+
+  const runEnhancements = () => {
+    stripRedundantWikiLinkPrefixes(sheetRoot);
+    if (journalEntry.getFlag(MODULE_ID, FLAGS.IS_MASTER_JOURNAL)) {
+      enhanceMasterJournalSidebar(sheetRoot, journalEntry);
+    }
+  };
+
+  runEnhancements();
+  requestAnimationFrame(runEnhancements);
+  setTimeout(runEnhancements, 60);
+}
+
+Hooks.on("renderJournalSheet", handleSyncedJournalRender);
+Hooks.on("renderJournalPageSheet", handleSyncedJournalRender);
+Hooks.on("renderJournalTextPageSheet", handleSyncedJournalRender);
+Hooks.on("renderApplicationV2", handleSyncedJournalRender);

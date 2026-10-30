@@ -637,3 +637,64 @@
   text-align: center;
 }
 
+/* ==========================================================================
+   Single Master Journal Sidebar Tree & Breadcrumb Styles
+   ========================================================================== */
+
+.lk-breadcrumb-sep {
+  opacity: 0.65;
+  margin: 0 2px;
+  font-weight: 700;
+}
+
+.lk-master-toc-item {
+  box-sizing: border-box;
+  position: relative;
+}
+
+.lk-master-toc-item.lk-toc-hidden-by-collapse {
+  display: none !important;
+}
+
+.lk-master-toc-item.lk-toc-folder .page-title {
+  font-weight: 600;
+}
+
+.lk-toc-prefix {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 5px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.lk-master-toc-item.lk-toc-folder .lk-toc-prefix {
+  cursor: pointer;
+}
+
+.lk-toc-caret {
+  display: inline-block;
+  width: 10px;
+  text-align: center;
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.lk-toc-folder-icon {
+  color: #d9a441;
+  font-size: 0.9em;
+}
+
+.lk-toc-leaf-marker {
+  opacity: 0.45;
+  font-family: monospace;
+  font-size: 0.9em;
+}
+
+.lk-toc-leaf-icon {
+  opacity: 0.6;
+  font-size: 0.85em;
+}
+
+

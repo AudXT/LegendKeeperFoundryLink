@@ -1,17 +1,18 @@
-import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.2.5";
+import { MODULE_ID, SETTINGS, FLAGS, DEFAULT_BASE_URL } from "../constants.js?v=1.2.6";
 import {
   LegendKeeper,
   NotFoundError,
   VersionMismatchError
-} from "../sdk/client.js?v=1.2.5";
+} from "../sdk/client.js?v=1.2.6";
 import {
   blocksToHtml,
+  renderFoundryContentLink,
   renderResourceDecorationHtml,
   renderMapDocumentHtml,
   renderTimelineDocumentHtml
-} from "../converter/blocks-to-html.js?v=1.2.5";
-import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.2.5";
-import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.2.5";
+} from "../converter/blocks-to-html.js?v=1.2.6";
+import { htmlToBlocks, isLkAssetUrl } from "../converter/html-to-blocks.js?v=1.2.6";
+import { promptPageConflictResolution } from "../ui/conflict-dialog.js?v=1.2.6";
 
 /**
  * Computes a deterministic string hash (FNV-1a 32-bit hex) for detecting local journal modifications
@@ -809,12 +810,16 @@ export class LegendKeeperSyncEngine {
     const renderNodeLink = (res) => {
       const entry = idx.byResourceId.get(res.id);
       const primaryMasterPage = idx.pagesByResourceId?.get(res.id)?.[0];
-      const cleanName = escapeHtml(res.name || "Untitled");
+      const rawName = res.name || "Untitled";
+      const cleanName = escapeHtml(rawName);
       let linkHtml = `<strong>${cleanName}</strong>`;
       if (entry) {
-        linkHtml = `@UUID[JournalEntry.${entry.id}]{${cleanName}}`;
+        linkHtml = renderFoundryContentLink(`JournalEntry.${entry.id}`, rawName);
       } else if (primaryMasterPage && idx.masterJournal) {
-        linkHtml = `@UUID[JournalEntry.${idx.masterJournal.id}.JournalEntryPage.${primaryMasterPage.id}]{${cleanName}}`;
+        linkHtml = renderFoundryContentLink(
+          `JournalEntry.${idx.masterJournal.id}.JournalEntryPage.${primaryMasterPage.id}`,
+          rawName
+        );
       }
       const tags = Array.isArray(res.tags) && res.tags.length > 0
         ? ` <span class="lk-index-tags">${res.tags.slice(0, 4).map((t) => `<span class="lk-tag-pill">${escapeHtml(t)}</span>`).join(" ")}</span>`
@@ -1258,6 +1263,7 @@ export class LegendKeeperSyncEngine {
       if (!localIndex.pagesByResourceId.has(res.id)) {
         const pageOwnership = this.#computePageOwnership(res.isHidden);
         const headingLevel = Math.min(Math.max(depth + 1, 1), 3);
+        const hasChildren = (childrenByParentId.get(res.id)?.length || 0) > 0;
         shellPagesToCreate.push({
           name: res.name || "Untitled",
           type: "text",
@@ -1271,6 +1277,8 @@ export class LegendKeeperSyncEngine {
               [FLAGS.RESOURCE_NAME]: res.name,
               [FLAGS.PARENT_ID]: res.parentId || null,
               [FLAGS.IS_PRIMARY_DOC]: true,
+              [FLAGS.TREE_DEPTH]: depth,
+              [FLAGS.HAS_CHILDREN]: hasChildren,
               [FLAGS.IS_HIDDEN]: Boolean(res.isHidden)
             }
           }
@@ -1299,6 +1307,9 @@ export class LegendKeeperSyncEngine {
       const existingResPages = localIndex.pagesByResourceId.get(listItem.id) || [];
       const primaryPage = existingResPages[0];
       const wasJustCreated = !primaryPage?.getFlag(MODULE_ID, FLAGS.LAST_SYNCED_AT);
+      const childIds = childrenByParentId.get(listItem.id) || [];
+      const chain = pathInfo.chainById.get(listItem.id) || [];
+      const ancestorIds = chain.slice(0, -1).map((a) => a.id);
 
       if (!wasJustCreated && primaryPage) {
         const storedLkUpdatedAt = primaryPage.getFlag(MODULE_ID, FLAGS.LK_UPDATED_AT);
@@ -1313,19 +1324,76 @@ export class LegendKeeperSyncEngine {
           for (let pIdx = 0; pIdx < existingResPages.length; pIdx++) {
             const p = existingResPages[pIdx];
             const desiredSort = baseSort + pIdx * 10;
-            const desiredLevel = Math.min(Math.max(depth + 1 + (pIdx > 0 ? 1 : 0), 1), 3);
+            const desiredTreeDepth = depth + (pIdx > 0 ? 1 : 0);
+            const desiredHasChildren = pIdx === 0 && childIds.length > 0;
+            const desiredLevel = Math.min(Math.max(desiredTreeDepth + 1, 1), 3);
             const isDocHidden = Boolean(listItem.isHidden || p.getFlag(MODULE_ID, FLAGS.IS_HIDDEN));
             const desiredOwnership = this.#computePageOwnership(isDocHidden);
+
+            const oldContent = p.text?.content || "";
+            const hasLegacyUuidMacro = oldContent.includes("@UUID[JournalEntry.");
+            const needsMultiCrumbUpgrade =
+              pIdx === 0 && ancestorIds.length > 1 && oldContent.includes("<strong>Parent:</strong>");
+            let newContent = hasLegacyUuidMacro
+              ? oldContent.replace(/@UUID\[([^\]]+)\](?:\{([^}]*)\})?/g, (_m, u, lbl) =>
+                  renderFoundryContentLink(u, lbl || listItem.name)
+                )
+              : oldContent;
+
+            if (needsMultiCrumbUpgrade) {
+              const crumbHtml = ancestorIds
+                .map((ancId) => {
+                  const ancPages = localIndex.pagesByResourceId.get(ancId);
+                  const ancPage = ancPages?.[0];
+                  const ancRes = pathInfo.remoteById.get(ancId);
+                  const ancName = ancRes?.name || ancPage?.name || "Parent";
+                  return ancPage
+                    ? renderFoundryContentLink(
+                        `JournalEntry.${masterJournal.id}.JournalEntryPage.${ancPage.id}`,
+                        ancName
+                      )
+                    : ancName;
+                })
+                .filter(Boolean)
+                .join(' <span class="lk-breadcrumb-sep">›</span> ');
+              if (crumbHtml) {
+                newContent = newContent.replace(
+                  /<span class="lk-meta-parent">[\s\S]*?<\/span>/,
+                  `<span class="lk-meta-parent"><strong>Path:</strong> ${crumbHtml}</span>`
+                );
+              }
+            }
+
+            const contentUpgraded = newContent !== oldContent;
+            const newPageHash = contentUpgraded
+              ? computeContentHash(`${p.name}|${stripGeneratedHtml(newContent)}`)
+              : p.getFlag(MODULE_ID, FLAGS.PAGE_HASH);
+
+            const storedDepth = p.getFlag(MODULE_ID, FLAGS.TREE_DEPTH);
+            const storedHasChildren = p.getFlag(MODULE_ID, FLAGS.HAS_CHILDREN);
+
             if (
               p.sort !== desiredSort ||
               p.title?.level !== desiredLevel ||
-              (p.ownership?.default ?? inheritLevel) !== desiredOwnership.default
+              (p.ownership?.default ?? inheritLevel) !== desiredOwnership.default ||
+              storedDepth !== desiredTreeDepth ||
+              storedHasChildren !== desiredHasChildren ||
+              contentUpgraded
             ) {
               fastPathUpdates.push({
                 _id: p.id,
                 sort: desiredSort,
                 title: { show: true, level: desiredLevel },
-                ownership: { ...(p.ownership || {}), ...desiredOwnership }
+                ownership: { ...(p.ownership || {}), ...desiredOwnership },
+                ...(contentUpgraded ? { text: { content: newContent, format: 1 } } : {}),
+                flags: {
+                  [MODULE_ID]: {
+                    [FLAGS.TREE_DEPTH]: desiredTreeDepth,
+                    [FLAGS.HAS_CHILDREN]: desiredHasChildren,
+                    [FLAGS.IS_HIDDEN]: isDocHidden,
+                    ...(contentUpgraded ? { [FLAGS.PAGE_HASH]: newPageHash } : {})
+                  }
+                }
               });
               anyMetaChanged = true;
             }
@@ -1349,7 +1417,8 @@ export class LegendKeeperSyncEngine {
       const resResult = await this.#pullResourceIntoMasterJournal(lk, listItem.id, masterJournal, {
         remoteResources: sortedResources,
         localIndex,
-        childResourceIds: childrenByParentId.get(listItem.id) || [],
+        childResourceIds: childIds,
+        ancestorIds,
         baseSort,
         depth
       });
@@ -1423,7 +1492,7 @@ export class LegendKeeperSyncEngine {
     lk,
     resourceId,
     masterJournal,
-    { remoteResources, localIndex, childResourceIds, baseSort = 1000, depth = 0 }
+    { remoteResources, localIndex, childResourceIds, ancestorIds = [], baseSort = 1000, depth = 0 }
   ) {
     const resource = await lk.resources.get({ resourceId });
     const hiddenHandling = this.getSetting(SETTINGS.HIDDEN_RESOURCE_HANDLING, "gmOnly");
@@ -1446,7 +1515,8 @@ export class LegendKeeperSyncEngine {
       secretHandling,
       resolveMention: converterContext.resolveMention,
       evaluateCollectionFilter: converterContext.evaluateCollectionFilter,
-      childResourceIds
+      childResourceIds,
+      ancestorIds
     });
 
     const existingResPages = localIndex.pagesByResourceId.get(resource.id) || [];
@@ -1577,6 +1647,8 @@ export class LegendKeeperSyncEngine {
 
       const isDocHidden = Boolean(effectiveResourceHidden || doc.isHidden);
       const pageOwnership = this.#computePageOwnership(isDocHidden);
+      const pageTreeDepth = depth + (isPrimaryPage ? 0 : 1);
+      const pageHasChildren = Boolean(isPrimaryPage && Array.isArray(childResourceIds) && childResourceIds.length > 0);
 
       const pageFlags = {
         [FLAGS.RESOURCE_ID]: resource.id,
@@ -1585,6 +1657,8 @@ export class LegendKeeperSyncEngine {
         [FLAGS.DOCUMENT_ID]: doc.id,
         [FLAGS.DOCUMENT_TYPE]: doc.type,
         [FLAGS.IS_PRIMARY_DOC]: isPrimaryPage,
+        [FLAGS.TREE_DEPTH]: pageTreeDepth,
+        [FLAGS.HAS_CHILDREN]: pageHasChildren,
         [FLAGS.VERSION]: blockVersion,
         [FLAGS.PAGE_HASH]: newPageHash,
         [FLAGS.LK_UPDATED_AT]: resource.updatedAt || new Date().toISOString(),
@@ -1672,6 +1746,7 @@ export class LegendKeeperSyncEngine {
           localIndex = this.buildLocalIndex();
         }
         const chain = folderHelper.pathInfo.chainById.get(resourceId) || [];
+        const ancestorIds = chain.slice(0, -1).map((a) => a.id);
         const depth = Math.max(0, chain.length - 1);
         const existingResPages = localIndex.pagesByResourceId.get(resourceId) || [];
         const baseSort = existingResPages[0]?.sort || (masterJournal.pages.size + 1) * 1000;
@@ -1680,6 +1755,7 @@ export class LegendKeeperSyncEngine {
           remoteResources,
           localIndex,
           childResourceIds,
+          ancestorIds,
           baseSort,
           depth
         });
@@ -1765,13 +1841,17 @@ export class LegendKeeperSyncEngine {
       .filter((d) => !(hiddenHandling === "skip" && d.isHidden))
       .sort((a, b) => ((a.rank ?? "") < (b.rank ?? "") ? -1 : 1));
 
+    const chain = folderHelper.pathInfo?.chainById?.get(resource.id) || [];
+    const ancestorIds = chain.slice(0, -1).map((a) => a.id);
+
     const { headerHtml, footerHtml } = renderResourceDecorationHtml(resource, {
       includeSidebarProperties,
       includeNavigationLinks,
       secretHandling,
       resolveMention: converterContext.resolveMention,
       evaluateCollectionFilter: converterContext.evaluateCollectionFilter,
-      childResourceIds
+      childResourceIds,
+      ancestorIds
     });
 
     const existingPagesByDocId = new Map();

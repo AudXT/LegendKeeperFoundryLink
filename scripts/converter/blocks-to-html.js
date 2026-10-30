@@ -14,6 +14,34 @@ export function escapeHtml(str) {
 }
 
 /**
+ * Renders an enriched Foundry VTT `.content-link` anchor directly so Foundry/modules
+ * never prepend the parent JournalEntry name ("📖 LegendKeeper Wiki/") onto JournalEntryPage links.
+ */
+export function renderFoundryContentLink(uuid, label) {
+  const rawUuid = String(uuid ?? "").trim();
+  const safeUuid = escapeHtml(rawUuid);
+  const cleanLabelStr = String(label ?? "Link")
+    .replace(/^\s*(?:📖\s*)?LegendKeeper\s+Wiki(?:\s+Index)?\s*(?:\/|:|-|—|›)\s*/i, "")
+    .trim();
+  const safeLabel = escapeHtml(cleanLabelStr || "Link");
+  if (!safeUuid) return safeLabel;
+
+  const pageMatch = /^JournalEntry\.([^.]+)\.JournalEntryPage\.([^.]+)$/.exec(rawUuid);
+  if (pageMatch) {
+    const pageId = escapeHtml(pageMatch[2]);
+    return `<a class="content-link lk-content-link" draggable="true" data-link data-uuid="${safeUuid}" data-id="${pageId}" data-type="JournalEntryPage" data-tooltip="${safeLabel}" data-lk-clean-label="${safeLabel}"><i class="fas fa-file-lines"></i>${safeLabel}</a>`;
+  }
+
+  const entryMatch = /^JournalEntry\.([^.]+)$/.exec(rawUuid);
+  if (entryMatch) {
+    const entryId = escapeHtml(entryMatch[1]);
+    return `<a class="content-link lk-content-link" draggable="true" data-link data-uuid="${safeUuid}" data-id="${entryId}" data-type="JournalEntry" data-tooltip="${safeLabel}" data-lk-clean-label="${safeLabel}"><i class="fas fa-book-open"></i>${safeLabel}</a>`;
+  }
+
+  return `@UUID[${safeUuid}]{${safeLabel}}`;
+}
+
+/**
  * Encodes a JSON object into a UTF-8 safe base64 string for round-trip block preservation.
  */
 export function encodeBlockMeta(obj) {
@@ -69,7 +97,7 @@ export function runsToHtml(content, context = {}) {
         const textAttr = text ? ` data-lk-text="${escapeHtml(text)}"` : "";
 
         if (resolved?.uuid) {
-          return `<span class="lk-mention" data-lk-resource-id="${escapeHtml(resourceId)}"${docAttr}${textAttr}>@UUID[${resolved.uuid}]{${escapeHtml(label)}}</span>`;
+          return `<span class="lk-mention" data-lk-resource-id="${escapeHtml(resourceId)}"${docAttr}${textAttr}>${renderFoundryContentLink(resolved.uuid, label)}</span>`;
         }
         return `<span class="lk-mention lk-mention-unresolved" data-lk-resource-id="${escapeHtml(resourceId)}"${docAttr}${textAttr}>${escapeHtml(label)}</span>`;
       }
@@ -102,7 +130,7 @@ export function runsToHtml(content, context = {}) {
               label: run.text || "Link"
             });
             if (resolved?.uuid) {
-              return `<span class="lk-link-internal" data-lk-href="${escapeHtml(href)}">@UUID[${resolved.uuid}]{${escapeHtml(run.text || "Link")}}</span>`;
+              return `<span class="lk-link-internal" data-lk-href="${escapeHtml(href)}" data-lk-clean-label="${escapeHtml(run.text || "Link")}">${renderFoundryContentLink(resolved.uuid, run.text || "Link")}</span>`;
             }
           }
           html = `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${html}</a>`;
@@ -198,7 +226,7 @@ export function renderPropertyBlockHtml(prop, context = {}) {
         label: prop.title || "Linked Map"
       });
       bodyHtml = resolved?.uuid
-        ? `<div class="lk-map-ref">@UUID[${resolved.uuid}]{${escapeHtml(prop.title || resolved.name || "Open Map")}}</div>`
+        ? `<div class="lk-map-ref">${renderFoundryContentLink(resolved.uuid, prop.title || resolved.name || "Open Map")}</div>`
         : `<div class="lk-map-ref">Map (${escapeHtml(prop.resourceId || "unlinked")})</div>`;
       break;
     }
@@ -246,7 +274,7 @@ function renderResourceLinksInnerHtml(items, context) {
       if (!resourceId) return "";
       const resolved = context.resolveMention?.({ resourceId, documentId });
       if (resolved?.uuid) {
-        return `<li data-lk-resource-id="${escapeHtml(resourceId)}">@UUID[${resolved.uuid}]{${escapeHtml(resolved.name || resourceId)}}</li>`;
+        return `<li data-lk-resource-id="${escapeHtml(resourceId)}">${renderFoundryContentLink(resolved.uuid, resolved.name || resourceId)}</li>`;
       }
       return `<li data-lk-resource-id="${escapeHtml(resourceId)}">${escapeHtml(resolved?.name || resourceId)}</li>`;
     })
@@ -465,7 +493,7 @@ export function blockToHtml(block, context = {}, index = 0) {
         label: block.title || "Map"
       });
       const linkHtml = resolved?.uuid
-        ? `@UUID[${resolved.uuid}]{${escapeHtml(block.title || resolved.name || "View Map")}}`
+        ? renderFoundryContentLink(resolved.uuid, block.title || resolved.name || "View Map")
         : `Map (${escapeHtml(block.resourceId || "unlinked")})`;
       return `<div class="lk-map-block ${floatClass}"${idAttr}${styleAttr} data-lk-block-b64="${encodeBlockMeta(block)}">${titleHtml}<div class="lk-map-link">${linkHtml}</div></div>`;
     }
@@ -507,7 +535,8 @@ export function renderResourceDecorationHtml(resource, options = {}) {
     secretHandling = "secretBlock",
     resolveMention,
     evaluateCollectionFilter,
-    childResourceIds = []
+    childResourceIds = [],
+    ancestorIds = []
   } = options;
 
   const context = {
@@ -529,12 +558,31 @@ export function renderResourceDecorationHtml(resource, options = {}) {
 
   // Breadcrumb / Parent Link & Tags / Aliases bar
   const metaPills = [];
-  if (includeNavigationLinks && resource.parentId && resource.parentId !== "templates") {
-    const parentResolved = resolveMention?.({ resourceId: resource.parentId });
-    if (parentResolved?.uuid) {
-      metaPills.push(
-        `<span class="lk-meta-parent"><strong>Parent:</strong> @UUID[${parentResolved.uuid}]{${escapeHtml(parentResolved.name || "Parent")}}</span>`
-      );
+  if (includeNavigationLinks) {
+    const effectiveAncestors =
+      Array.isArray(ancestorIds) && ancestorIds.length > 0
+        ? ancestorIds
+        : resource.parentId && resource.parentId !== "templates"
+          ? [resource.parentId]
+          : [];
+
+    if (effectiveAncestors.length > 0) {
+      const crumbLinks = effectiveAncestors
+        .map((ancId) => {
+          const resolved = resolveMention?.({ resourceId: ancId });
+          if (resolved?.uuid) {
+            return renderFoundryContentLink(resolved.uuid, resolved.name || "Parent");
+          }
+          return resolved?.name ? escapeHtml(resolved.name) : "";
+        })
+        .filter(Boolean);
+
+      if (crumbLinks.length > 0) {
+        const labelPrefix = crumbLinks.length > 1 ? "Path:" : "Parent:";
+        metaPills.push(
+          `<span class="lk-meta-parent"><strong>${labelPrefix}</strong> ${crumbLinks.join(' <span class="lk-breadcrumb-sep">›</span> ')}</span>`
+        );
+      }
     }
   }
 
@@ -611,7 +659,7 @@ export function renderMapDocumentHtml(doc, features = [], context = {}) {
               label: f.name || "Linked Entry"
             });
             if (resolved?.uuid) {
-              linkedHtml = `@UUID[${resolved.uuid}]{${escapeHtml(resolved.name || f.name || "Open")}}`;
+              linkedHtml = renderFoundryContentLink(resolved.uuid, resolved.name || f.name || "Open");
             }
           }
         }
@@ -657,7 +705,7 @@ export function renderTimelineDocumentHtml(doc, lanes = [], events = [], context
               label: ev.name || "Event"
             });
             if (resolved?.uuid) {
-              linkedHtml = `@UUID[${resolved.uuid}]{${escapeHtml(ev.name || resolved.name || "Event")}}`;
+              linkedHtml = renderFoundryContentLink(resolved.uuid, ev.name || resolved.name || "Event");
             }
           }
         }
